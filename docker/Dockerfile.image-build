@@ -1,0 +1,50 @@
+# Dockerfile.image-build — native x86_64 environment for building the
+# kernel, musl, busybox, and assembling the encrypted-linux initramfs.
+#
+# Multi-arch image; on arm64 macOS, build with --platform linux/amd64
+# (slow under QEMU, but the target is x86_64 Linux).
+
+FROM --platform=linux/amd64 ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        bc bison flex \
+        libelf-dev libssl-dev \
+        ncurses-dev \
+        wget xz-utils ca-certificates \
+        cpio \
+        rsync \
+        python3 \
+        kmod \
+        file \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Stage Linux kernel source (v6.6 LTS — matches scripts/upstream/syscall_64.tbl).
+ARG LINUX_VERSION=6.6.30
+ARG LINUX_URL=https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz
+WORKDIR /opt
+RUN wget -q "${LINUX_URL}" -O linux.tar.xz && \
+    tar -xJf linux.tar.xz && \
+    mv linux-${LINUX_VERSION} linux && \
+    rm linux.tar.xz
+
+# Stage musl source.
+ARG MUSL_VERSION=1.2.5
+ARG MUSL_URL=https://musl.libc.org/releases/musl-${MUSL_VERSION}.tar.gz
+RUN wget -q "${MUSL_URL}" -O musl.tar.gz && \
+    tar -xzf musl.tar.gz && \
+    mv musl-${MUSL_VERSION} musl && \
+    rm musl.tar.gz
+
+# Stage BusyBox source.
+ARG BUSYBOX_VERSION=1.36.1
+ARG BUSYBOX_URL=https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2
+RUN wget -q "${BUSYBOX_URL}" -O busybox.tar.bz2 && \
+    tar -xjf busybox.tar.bz2 && \
+    mv busybox-${BUSYBOX_VERSION} busybox && \
+    rm busybox.tar.bz2
+
+WORKDIR /work
+CMD ["/bin/bash"]

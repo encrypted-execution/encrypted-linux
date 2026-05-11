@@ -1,12 +1,10 @@
 # encrypted-linux — Current State
 
-**Last updated:** 2026-05-11
-**Phase:** Real GCC backend patch shipped and tested — `patches/
-scramble-gcc-v0.patch` (84 lines). Patched GCC produces assembly
-with permuted argument registers exactly matching the seed-derived
-Fisher-Yates permutation. All four shipped artifacts (post-pass,
-plugin, seed-lib+unistd, backend patch) PASS, 40 checks total.
-Next: Buildroot integration; full Phase 1 musl rebuild; QEMU boot.
+**Last updated:** 2026-05-11 (afternoon — saved mid-build)
+**Phase:** Phase-2 QEMU image **partially built**. bzImage and a
+471-MB initramfs (with bundled scrambling GCC + glibc libs) exist in
+`build/image/`. **Not yet booted/verified.** Next session: boot it
+in QEMU and run the cross-host failure verification.
 
 ## Decisions (confirmed by user 2026-05-11)
 
@@ -168,6 +166,81 @@ Verified: `id0(int a) { return a; }` compiles to `movl %edx, %eax;
 ret` instead of `movl %edi, %eax; ret`. All six identity functions
 read from the seed-derived permuted register. `make demo-gcc` →
 9/9 PASS.
+
+### QEMU image build pipeline (committed, partially executed)
+
+Target: `bash scripts/run-qemu.sh` boots a Linux image with permuted
+syscall numbers. Inside the VM, `hello` works; copied to a stock host
+it fails (-ENOSYS / segfault) because the stock kernel doesn't know
+the renumbered syscalls.
+
+Shipped artifacts (this session):
+- `docker/Dockerfile.gcc-amd64` — stages GCC 14 source under
+  `--platform linux/amd64` for building a NATIVE x86_64 patched GCC.
+- `docker/Dockerfile.image-build` — stages Linux kernel 6.6.30 +
+  musl 1.2.5 + BusyBox 1.36.1 source for the rootfs build.
+- `scripts/build-native-gcc.sh` — builds patched GCC as a native
+  x86_64 binary deployable to the VM. **COMPLETED**: artifact at
+  `build/native-gcc/install/bin/x86_64-linux-gnu-gcc` (dynamically
+  linked against glibc; needs its libs bundled into the rootfs).
+- `scripts/gen-kernel-syscall-tbl.py` — writes a permuted
+  `syscall_64.tbl` sorted by new number (required by the kernel
+  build). Uses the same HMAC convention as gen-unistd-seeded.py, so
+  kernel and userspace numbers always agree. **WORKS** (write 1→639,
+  read 0→853, execve 59→448, etc.).
+- `scripts/build-image.sh` — top-level image builder. Builds kernel
+  with permuted `syscall_64.tbl`, builds musl with stock x86_64 GCC
+  using permuted kernel headers, then static busybox + static
+  `hello` against that musl. **COMPLETED** through busybox + hello
+  build; the chrooted `busybox --install` step hung under QEMU TCG
+  emulation. Separated into:
+- `scripts/assemble-initramfs.sh` — host-side assembly using
+  `ln -sf` instead of `busybox --install`. **COMPLETED**: produces
+  `build/image/rootfs.cpio.gz` (471 MB, bundles the native
+  scrambling GCC + glibc loader/libs).
+- `scripts/run-qemu.sh` — `qemu-system-x86_64` runner. **NOT YET
+  EXECUTED** (this session ended mid-boot).
+- `scripts/test-cross-host-failure.sh` — runs `hello` inside a
+  stock ubuntu:24.04 amd64 container; expects ENOSYS / segfault /
+  exec-format-error. **NOT YET EXECUTED.**
+
+Built artifacts in `build/image/` (gitignored):
+- `bzImage` (1.5 MB) — Linux 6.6.30 with permuted syscall_64.tbl
+- `rootfs.cpio.gz` (471 MB) — initramfs with busybox, hello, native
+  scrambling GCC + glibc libs, hello.c source, init script
+- `hello` (16 KB) — static, x86-64, links against scrambled musl
+  with permuted syscall numbers
+- `busybox` (1 MB) — static, linked against scrambled musl
+- `sysroot/usr/lib/libc.a` — scrambled musl (permuted syscall #s)
+- `sysroot/usr/include/asm/unistd_64.h` — permuted kernel headers
+
+Built artifacts in `build/native-gcc/` (gitignored):
+- `install/bin/x86_64-linux-gnu-gcc` — native x86_64 scrambling
+  GCC binary. Dynamically linked. Suitable for use inside the QEMU
+  guest (glibc libs are bundled into the initramfs).
+
+### Known gaps before the QEMU boot demo passes
+
+1. **Image not yet booted.** First time the user runs
+   `bash scripts/run-qemu.sh` will be the smoke test. The kernel
+   was built with `tinyconfig` + minimum adds; if it can't even
+   reach userspace, switch to `defconfig` in `build/build-image.sh`.
+2. **GCC inside VM** — bundled but not yet tested. The patched
+   x86_64 GCC needs glibc to run (the bundled libs in
+   `/lib/x86_64-linux-gnu/` should make this work). To validate:
+   inside the VM, `gcc /src/hello.c -o /tmp/hello && /tmp/hello`.
+3. **Phase 1 ABI scrambling NOT in the rootfs binaries.** musl in
+   the image was built with **stock** x86_64 GCC + the
+   syscall-renumbered kernel headers (Phase 2 only). The bundled
+   native scrambling GCC would add Phase 1 to programs compiled
+   inside the VM, but the busybox / hello already in the image
+   use canonical SysV ABI. So:
+     - hello copied out → fails on stock kernel (-ENOSYS) ✓ Phase 2
+     - hello inspected with `nm` → no `__abi_*` symbols (Phase 1
+       integration with musl deferred — see plan/01 M3+M4).
+4. **Cross-host failure verification** needs both the boot and a
+   stock ubuntu:24.04 container test. `scripts/test-cross-host-
+   failure.sh` is staged.
 
 ### What unblocks now
 

@@ -1,0 +1,46 @@
+# Dockerfile.gcc-amd64 — encrypted-linux-gcc but for native x86_64 builds.
+#
+# When we want a GCC binary that runs INSIDE an x86_64 guest VM (not a
+# cross-compiler from arm64), we build inside this amd64-platform image.
+# On arm64 macOS hosts this runs under QEMU emulation — slow but correct.
+#
+# Image base, layers, and GCC source download are identical to
+# Dockerfile.gcc-build; only the platform changes.
+#
+# Build:
+#   docker buildx build --platform linux/amd64 -t encrypted-linux-gcc:amd64 \
+#       -f docker/Dockerfile.gcc-amd64 .
+
+FROM --platform=linux/amd64 ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        flex bison \
+        libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
+        texinfo \
+        wget xz-utils ca-certificates \
+        git \
+        binutils-dev \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG GCC_VERSION=14.2.0
+ARG GCC_URL=https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz
+ARG GCC_SHA256=a7b39bc69cbf9e25826c5a60ab26477001f7c08d85cec04bc0e29cabed6f3cc9
+WORKDIR /opt
+RUN wget -q "${GCC_URL}" -O gcc.tar.xz && \
+    echo "${GCC_SHA256}  gcc.tar.xz" | sha256sum -c - && \
+    tar -xJf gcc.tar.xz && \
+    mv gcc-${GCC_VERSION} gcc-14 && \
+    rm gcc.tar.xz
+
+RUN cd /opt/gcc-14 && ./contrib/download_prerequisites || true
+
+WORKDIR /build
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g "${GID}" -o builder && useradd -m -u "${UID}" -g "${GID}" -o builder \
+    && chown -R builder:builder /opt/gcc-14
+USER builder
+CMD ["/bin/bash"]

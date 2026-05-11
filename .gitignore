@@ -32,3 +32,6 @@ seed.local
 *.pyc
 __pycache__/
 *.go.sum  # except inline modules
+tmp-*
+build/
+tmp-*.sh
