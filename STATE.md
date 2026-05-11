@@ -1,127 +1,112 @@
 # encrypted-linux — Current State
 
 **Last updated:** 2026-05-11
-**Phase:** Research → about to enter Plan-of-Action authoring.
+**Phase:** Plan complete. Ready for implementation review.
 
 ## What's done
 
-Six parallel research agents completed dossiers (all in `research/`):
+### Research (all 7 dossiers in `research/`)
 
-1. `research/01-encrypted-execution-thesis.md` — The Encrypted Execution
-   paper (Gore 2025). Core thesis, threat model, closure framing, prior art
-   it cites (randstruct, FG-ASLR, ISR). Key fact: the paper explicitly names
-   the encrypted-linux extreme on p. 10 (`<compiler-codegen-backend, ISA>`
-   pairs). Patent USPTO 10,733,303 is pledged to the public domain.
+1. `01-encrypted-execution-thesis.md` — The Encrypted Execution paper
+   (Gore 2025). Core thesis, threat model, closure framing.
+2. `02-php-scrambler-lessons.md` — How the PHP scrambler at
+   `/Users/archisgore/github/encrypted-execution/php-v2/` actually works,
+   with lessons for C/GCC.
+3. `03-randstruct-prior-art.md` — Linux randstruct GCC plugin; closest
+   prior art. Explicit "why it doesn't randomize calling conventions"
+   analysis.
+4. `04-gcc-calling-convention-internals.md` — Where in GCC the SysV
+   AMD64 psABI lives. Recommended attachment point:
+   `ms_abi`/`sysv_abi` dual-ABI infrastructure.
+5. `05-distro-bootstrap-options.md` — Recommendation: fork Buildroot,
+   target musl + BusyBox + static-only.
+6. `06-dynamic-linking-and-threat-model.md` — Honest threat model.
+   Symbol-name mangling as the load-bearing piece.
+7. `07-polyverse-polymorphic-linux.md` — Polyverse's prior commercial
+   work. Key insight: Polymorphic Linux's seven transformations
+   *preserved* the calling convention; encrypted-linux's novelty is
+   exactly that boundary.
 
-2. `research/02-php-scrambler-lessons.md` — How the PHP scrambler at
-   `/Users/archisgore/github/encrypted-execution/php-v2/` actually works.
-   Edits `zend_language_scanner.l` and `zend_language_parser.y`, regenerates
-   re2c/bison, incremental `make` (~30s). Dictionary at
-   `/var/lib/encrypted-execution/token-map.json` is the closure key. Key
-   lessons for C/GCC: modify grammar source not bytecode; closure must close
-   at build time; tokenize with the same engine that executes; fail-closed
-   at parse/load.
+### Plan (all 5 documents in `plan/`)
 
-3. `research/03-randstruct-prior-art.md` — Linux randstruct GCC plugin at
-   `scripts/gcc-plugins/randomize_layout_plugin.c`. Hooks `PLUGIN_FINISH_TYPE`
-   before `finalize_type_size`. Seed at `scripts/gcc-plugins/randstruct.seed`,
-   baked into plugin binary. Survives `make clean`, not `make mrproper`.
-   Randstruct **does NOT scramble calling conventions** — only struct field
-   order — because calling conventions are *external by definition* (they
-   exist to glue independently compiled code). That is precisely the gap
-   encrypted-linux must fill.
+- `00-design-principles.md` — 11 load-bearing decisions. Closure as
+  primitive, determinism per seed (SOURCE_DATE_EPOCH model), symbol
+  mangling as detection surface, fail-closed at load, reuse GCC dual-
+  ABI infrastructure, single-distro pilot (Alpine), trust bootstrap
+  acknowledged not solved.
+- `01-phase1-userland-scrambling.md` — 7 milestones, 3–6 weeks.
+  Scrambling GCC + scrambled musl + scrambled BusyBox + stock kernel
+  in QEMU. Static-only with one dynamic library to demo the load-time
+  failure.
+- `02-phase2-kernel-scrambling.md` — 7 milestones, 4–8 weeks beyond
+  Phase 1. Syscall renumbering + kernel-internal ABI scrambling +
+  modversions-CRC seed folding + vDSO + eBPF.
+- `03-risks-and-honest-limitations.md` — What encrypted-linux is and
+  is NOT. Comparison against Polyverse's record. The Thompson "trusting
+  trust" gap acknowledged.
+- `04-smallest-proof-of-concept.md` — 4-week single-engineer path from
+  zero to demo asciicast. Stock kernel, userland only, arg-register
+  permutation + symbol mangling only. One scrambled `hello` + one
+  stock-built `hello`; the demo is the load-time `undefined symbol`
+  failure side-by-side with the working scrambled binary.
 
-4. `research/04-gcc-calling-convention-internals.md` — Where in GCC the
-   SysV AMD64 psABI lives: `gcc/config/i386/i386.cc` (`ix86_function_arg`,
-   `ix86_function_arg_advance`, `ix86_function_value`, `ix86_return_in_memory`,
-   `ix86_compute_frame_layout`, prologue/epilogue, varargs). The clean
-   integration point is GCC's existing `ms_abi`/`sysv_abi` dual-ABI
-   infrastructure — add a third ABI variant parameterized by seed. DWARF
-   CFI is data-driven, so unwinding/C++ EH come for free if prologue notes
-   are emitted correctly. Hard parts: libgcc, glibc `setjmp.S`, glibc
-   `dl-trampoline.S`, varargs save-area layout, libffi, JITs (V8/LuaJIT),
-   inline asm in glibc/OpenSSL/kernel. Kernel syscall ABI is a clean
-   boundary (defined by kernel, not user-space C ABI).
+### Build-up artifacts
 
-5. `research/05-distro-bootstrap-options.md` — **Recommendation: fork
-   Buildroot, target musl + BusyBox + static-only, modeled on Oasis/Stali.**
-   Five binaries total (kernel + musl + busybox + init + demo). Slackware
-   is the wrong choice (too big, glibc-bound, dynamic). Disable GCC
-   3-stage bootstrap (`--disable-bootstrap`) for PoC. Treat scramble seed
-   as `SOURCE_DATE_EPOCH`-equivalent for determinism. Defer Guix/Mes
-   full-source bootstrap to v2 trust story.
+- GitHub repo: `github.com/encrypted-execution/encrypted-linux` (public).
+- README.md, STATE.md (this file).
+- Two commits: initial 6 dossiers + dossier 07.
+- This update will be the third commit.
 
-6. `research/06-dynamic-linking-and-threat-model.md` — Honest threat model.
-   **Symbol-name mangling is the load-bearing piece** that converts silent
-   ABI mismatches into deterministic load-time errors. Precedent already
-   shipping: kernel `modversions` CRC, glibc symbol versioning, C++
-   Itanium mangling. ROP gadgets still exist but their semantics shift —
-   `pop %rdi; ret` no longer means "load arg1." This is a moving-target /
-   unique-target defense, **not** a confidentiality defense — a single
-   target binary reveals the convention. Defends against blind/universal
-   exploits and forces attacker to possess the compiler. Stacks cleanly
-   with kCFI/FineIBT/Secure Boot. Phase 2 syscall renumbering has clear
-   research prior art (Chen/Pande/Ramachandran; ISR by Kc/Keromytis) but
-   **no mainline implementation found** — encrypted-linux as scoped is
-   novel as a productized distro.
+## What's queued next
 
-## What's queued next (high priority)
+### Pre-implementation user decisions (the open questions from the
+previous STATE.md, now refined)
 
-**The user added a follow-up research item right before asking us to save state:**
+The plan documents bake in strong recommendations. If you want to
+deviate from any of these, push back BEFORE the patch series starts;
+deviation costs less now than at week 3.
 
-> "Also go through all the polyverse documents and anything you can find on
-> Polymorphic Linux or Polyscripting. To add to your research."
+1. **Confirm Buildroot.** Plan/04 assumes it. Alternatives: LFS (too
+   many packages), Yocto (slow iteration), custom Makefile (extra
+   work for no benefit).
+2. **Confirm musl.** Plan/01 M4 assumes it. Glibc is ~20× the asm
+   audit effort (`research/05` §4).
+3. **Confirm dynamic library in the PoC demo.** Plan/04 has the
+   dual-hello demo using *one* dynamic library (libc) to show the
+   load-time failure mode. Alternative: pure static demo with kernel
+   ENOSYS (requires pulling Phase 2 forward). The dual-hello approach
+   is simpler and demos faster.
+4. **Confirm `--disable-bootstrap` for PoC.** Plan/00 §10 documents
+   the gap; Mes/TinyCC self-host is a v2 milestone.
+5. **License: Apache-2.0.** Plan/00 §11 documents the patent posture.
+6. **Single-distro pilot (Alpine).** Plan/00 §9 — explicit reversal of
+   Polyverse's seven-distro mistake.
+7. **Phase split: userland → kernel.** Plan/01 vs plan/02 as separate
+   milestones. Alternative: parallel tracks. Series-first is safer.
 
-This is **research/07-polyverse-polymorphic-linux.md** — NOT YET WRITTEN.
-The agent that resumes must do this first. Specifically search:
+### Once decisions are confirmed: implementation kickoff
 
-- The author's own historical work at Polyverse Corporation (the paper's
-  copyright holder).
-- "Polymorphic Linux" — Polyverse's commercial product (~2017–2020). Public
-  blog posts, GitHub orgs (`Polyverse-Security`, `polyverse`,
-  `polyverse-research`), white papers, recorded talks (DEF CON, BlackHat,
-  RSA, OSCON).
-- "Polyscripting" as a Polyverse trademark / product line — find their
-  whitepapers, slide decks, blog posts on RubyGems, npm, WordPress, PHP
-  scrambling commercializations.
-- Patents assigned to Polyverse beyond USPTO 10,733,303. Search USPTO and
-  Google Patents for "Polyverse Corporation" assignee.
-- Academic papers citing Polymorphic Linux (Google Scholar, IEEE, ACM).
+The smallest single deliverable that starts the engineering work is:
 
-Why this matters: Polymorphic Linux was the commercial precursor that
-randomized symbol names across **every binary in the distro**, distributed
-nightly. Lessons learned there — what worked, what hit production walls,
-what they did about glibc and the kernel, why the company pivoted — are
-directly applicable. The PHP scrambler we already studied is the
-educational descendant; Polymorphic Linux is the production ancestor.
+`patches/scramble-gcc-v0.patch` — the 200–400 LOC GCC backend patch
+that adds the `ENCRYPTED_LINUX_ABI` variant with arg-register
+permutation + symbol mangling.
 
-Write that dossier (≤1800 words, with URLs and direct quotes) before
-authoring `plan/`.
+Plan/04 step 1 lists the five touchpoints inside i386.cc. A
+single-engineer week of focused work; demo-able with a
+hand-written test case before any musl/Buildroot infrastructure
+exists.
 
-## What's queued after that
+After that:
+- Week 2 of plan/04: integrate into Buildroot.
+- Weeks 3–4 of plan/04: musl rebuild, busybox, dual-hello demo,
+  asciicast, README update.
 
-Author the phased plan in `plan/`:
+Then plan/01 M3 onward (callee-saved permutation, CFI tests, libgcc
+soundness, ELF-note seed tag) — the path to a real Phase 1, not just
+a PoC.
 
-- `plan/00-design-principles.md` — closure, determinism, fail-closed,
-  symbol mangling as detection surface, what we explicitly do NOT scramble
-  (UAPI structs, syscall ABI in Phase 1, the build-system contract).
-- `plan/01-phase1-userland-scrambling.md` — milestones, smallest PoC,
-  exit criteria.
-- `plan/02-phase2-kernel-scrambling.md` — syscall renumbering,
-  kernel-internal ABI scrambling, module ABI tying.
-- `plan/03-risks-and-honest-limitations.md` — copy of §3–6 from
-  `research/06`, expanded to acknowledge: not a confidentiality boundary,
-  seed extractable from any on-disk binary, doesn't stop data-only or
-  logic-bug attacks, supply-chain attack on the build farm owns the seed.
-- `plan/04-smallest-proof-of-concept.md` — five-binary Buildroot PoC,
-  `qemu-system-x86_64` demo, exit criterion: stock-built `hello` either
-  fails to load (`undefined symbol`) or SIGILLs at the first scrambled
-  call, while the encrypted-linux-built `hello` runs cleanly.
-
-## Reproducing the research
-
-Each agent's full transcript is summarized in its dossier file. The
-agents are still addressable by ID for follow-up questions:
+## Reproducing the research (agent IDs may be stale by resume time)
 
 - `a4e3c9e89771c4596` — Encrypted Execution paper
 - `ae59942b4d6ed20cf` — PHP scrambler codebase
@@ -129,25 +114,4 @@ agents are still addressable by ID for follow-up questions:
 - `aa05eb3d7a245f4a4` — GCC calling convention internals
 - `a3639813e3e0a1c3a` — distro bootstrap options
 - `a7748a7cc227b94e2` — dynamic linking / threat model
-
-(Agent IDs may have expired by the time work resumes; treat as
-"who to re-spawn with this dossier as context" rather than "send a
-message to.")
-
-## Open questions to bring to the user before writing code
-
-1. **Buildroot vs LFS vs custom build harness** — research recommends
-   Buildroot strongly. Confirm before writing build scripts.
-2. **musl vs glibc** — research recommends musl strongly. Confirm.
-3. **Static-only vs dynamic** — research recommends static-only for PoC,
-   noting that this means Phase 1 doesn't actually break dynamic linking
-   (because there is none). If demonstrating *broken dynamic linking* is
-   the headline, we need at least one dynamic library in the PoC. Ask the
-   user whether the demo is "static binaries with mangled syscalls/symbols
-   fail" or "stock .so won't load into scrambled binary."
-4. **Stage1 bootstrap discipline** — for the PoC, run the scrambling GCC
-   from a stock host GCC build (no self-hosting). For v2, do we want
-   self-hosting + Mes full-source bootstrap? This is the trust story.
-5. **License** — Apache-2.0 confirmed?
-6. **Repo visibility** — public on GitHub under
-   `github.com/encrypted-execution/encrypted-linux`?
+- `a5cc2245a90312e3c` — Polyverse / Polymorphic Linux / Polyscripting
