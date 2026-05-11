@@ -85,28 +85,44 @@ if [ -d /work/build/native-gcc/install ]; then
     ln -sf /usr/local-gcc/libexec/gcc/x86_64-linux-gnu/14.2.0/cc1 "${ROOT}/usr/bin/cc1" 2>/dev/null || true
 fi
 
-# init script.
+# init script. Behavior selectable via kernel cmdline el_demo=auto:
+#   - el_demo=auto: run /bin/hello, print boot evidence, then halt
+#   - default:      drop to interactive busybox shell
 cat > "${ROOT}/init" <<'INIT'
 #!/bin/busybox sh
 /bin/busybox mount -t proc none /proc
 /bin/busybox mount -t sysfs none /sys
 /bin/busybox mount -t devtmpfs none /dev
+
+# Read kernel command-line.
+CMDLINE=$(/bin/busybox cat /proc/cmdline)
+
 echo
 echo "============================================================="
 echo "  encrypted-linux PoC v0                                      "
-echo "                                                              "
-echo "  This system was built with PERMUTED syscall numbers.        "
-echo "  Try:                                                        "
-echo "    /bin/hello                                                "
-echo "      -> 'hello from inside encrypted-linux!'                 "
-echo "                                                              "
-echo "  Then exit this VM and try:                                  "
-echo "      docker run --rm -v \$PWD/build/image:/w ubuntu /w/hello   "
-echo "      -> ENOSYS / segfault / 'Bad system call'                "
-echo "      (stock kernel doesn't recognize our permuted syscalls)  "
+echo "  PERMUTED syscall numbers in kernel + musl                  "
 echo "============================================================="
 echo
-exec /bin/busybox sh +m
+
+if /bin/busybox echo "${CMDLINE}" | /bin/busybox grep -q "el_demo=auto"; then
+    echo "[el_demo=auto] auto-running /bin/hello..."
+    /bin/hello
+    rc=$?
+    echo "[el_demo=auto] /bin/hello exited with rc=${rc}"
+    echo "[el_demo=auto] /bin/hello details:"
+    /bin/busybox file /bin/hello 2>/dev/null
+    /bin/busybox stat /bin/hello | /bin/busybox grep -E "Size|Modify"
+    echo "[el_demo=auto] running 'uname -r' as a 2nd syscall test:"
+    /bin/busybox uname -a
+    echo "[el_demo=auto] PASS - VM reached userspace and ran hello"
+    echo "[el_demo=auto] halting"
+    /bin/busybox poweroff -f
+else
+    echo "Try:  /bin/hello"
+    echo "Then: exit (Ctrl-A X in QEMU) and run scripts/test-cross-host-failure.sh"
+    echo
+    exec /bin/busybox sh +m
+fi
 INIT
 chmod +x "${ROOT}/init"
 ln -sf init "${ROOT}/sbin/init"

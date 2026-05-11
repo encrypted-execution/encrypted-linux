@@ -1,10 +1,10 @@
 # encrypted-linux — Current State
 
-**Last updated:** 2026-05-11 (afternoon — saved mid-build)
-**Phase:** Phase-2 QEMU image **partially built**. bzImage and a
-471-MB initramfs (with bundled scrambling GCC + glibc libs) exist in
-`build/image/`. **Not yet booted/verified.** Next session: boot it
-in QEMU and run the cross-host failure verification.
+**Last updated:** 2026-05-11 (evening)
+**Phase:** **QEMU image BOOTS AND RUNS hello.** Cross-host failure
+verified: copying the same hello binary to a stock ubuntu:24.04
+container segfaults (exit 139). Both Phase 1 and Phase 2 demos
+operational. See `docs/DEMO-EVIDENCE.md` for captured output.
 
 ## Decisions (confirmed by user 2026-05-11)
 
