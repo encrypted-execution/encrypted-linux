@@ -1,9 +1,9 @@
 # encrypted-linux — Current State
 
 **Last updated:** 2026-05-11
-**Phase:** Plan locked. Pre-implementation decisions confirmed. Repo
-scaffolding in progress. Next: GCC patch v0 + Phase 2 M1 generator
-(parallel tracks).
+**Phase:** First working code merged to `main`. Joint demo
+end-to-end PASS (19/19 checks). Next: real GCC patch v0 to replace
+the post-compile mangler; Buildroot integration; QEMU boot.
 
 ## Decisions (confirmed by user 2026-05-11)
 
@@ -73,30 +73,62 @@ scaffolding in progress. Next: GCC patch v0 + Phase 2 M1 generator
 
 ## What's queued next
 
-### Implementation kickoff — parallel tracks
+### Track A — symbol mangling (shipped)
 
-See `plan/05-parallel-tracks.md` for the dependency graph and schedule.
+Symbol mangling is the load-bearing piece of Phase 1 (plan/00 §3).
+PoC scope deliberately scoped down from "real GCC backend patch" to
+"post-compile pass using `objcopy --redefine-syms`" — same observable
+property (load-time `undefined symbol` failure), 1000× less GCC work.
 
-The two starting items that can begin immediately, **simultaneously**:
+Shipped artifacts:
+- `scripts/seed-lib.sh` — bash HMAC-SHA256 sub-seed derivation
+- `scripts/scramble-mangle.sh` — main mangler
+- `scripts/scramble-mangle-test/` — hello/libthing/main triple, test.sh
+- `docker/Dockerfile.test` — Ubuntu 24.04 image, ~150 MB
+- `docker/Dockerfile.gcc-build` — staged GCC 14 source for the future
+  real patch, ~1.2 GB (image not yet built)
 
-1. **Track A — GCC patch v0** (`patches/scramble-gcc-v0.patch`).
-   200–400 LOC GCC backend patch adding the `ENCRYPTED_LINUX_ABI`
-   variant: arg-register permutation + symbol mangling. Plan/04 step 1
-   lists the five touchpoints in `gcc/config/i386/i386.cc`. ~1 engineer-
-   week. Demo-able with a hand-written test case before any musl /
-   Buildroot infrastructure exists. Gates Track A milestones M4 onward
-   AND Track B kernel-internal ABI scrambling.
+Joint demo: `make test` → 5/5 Track A checks PASS. The cross-link case
+fails with `main.c:(.text+0xc): undefined reference to
+\`compute__abi_15e2ce22'\`` — proof of the fail-closed property
+plan/00 §5 requires.
 
-2. **Track B — `unistd_seeded.h` generator** (`scripts/gen-unistd-seeded`).
-   Independent of the GCC patch entirely; needs only the seed file and
-   the canonical `syscall_64.tbl`. Outputs the renumbered kernel
-   header and the kernel-side dispatch table. ~2 engineer-days.
+### Track B — seed-lib + syscall renumbering (shipped)
 
-Suggested starting allocation:
-- If one engineer: Track A first (it unblocks more), Track B in the
-  background.
-- If two engineers: split, sync weekly on the seed-derivation library
-  (shared between both).
+Phase 2 M1 prerequisite (Track B in plan/05). Independent of any GCC
+work; can already produce demo-able artifacts.
+
+Shipped artifacts:
+- `scripts/seed_lib.py` — pure-stdlib Python 3 HMAC-SHA256 module
+- `scripts/seed-lib.py` — CLI shim
+- `scripts/gen-unistd-seeded.py` — reads vendored `syscall_64.tbl` +
+  seed, emits bijective renumbering (HMAC-mod-1024 with linear-probe
+  collision resolution)
+- `scripts/test/test-seed-lib.sh` — 14 checks: known-vector, bijection,
+  determinism (byte-identical reruns)
+- `scripts/upstream/syscall_64.tbl` — vendored from linux v6.6
+
+Joint demo: `make test` → 14/14 Track B checks PASS. PoC-seed renumbering
+on stable headline calls: `read 0→853`, `write 1→639`, `openat 257→555`,
+`execve 59→448`, `exit_group 231→983`.
+
+### What unblocks now
+
+With Tracks A and B both green:
+- The dual-hello + load-time-failure asciicast (plan/04) is reachable
+  with another ~2 days of work (just wire the existing test into a
+  scripted recording).
+- Phase 2 M2 (consume the renumbered header in musl) is now unblocked
+  (just needs musl source + the existing `unistd_seeded.h` artifact).
+- Phase 2 M4 (modversions CRC seed-fold) is independent and shippable
+  next.
+
+The full GCC backend patch (real arg-register permutation, callee-saved
+permutation, ELF-note seed tag) remains the critical-path long-pole —
+plan/01 M1+M3, plan/05 §"What's on the critical path." Now that the
+mangling-only PoC ships, the GCC patch is no longer blocking the
+asciicast; it becomes the gateway to plan/01 M4+ (rebuild musl with
+real ABI scrambling, not just mangling).
 
 ## Reproducing the research (agent IDs may be stale by resume time)
 
