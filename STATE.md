@@ -1,7 +1,21 @@
 # encrypted-linux — Current State
 
 **Last updated:** 2026-05-11
-**Phase:** Plan complete. Ready for implementation review.
+**Phase:** Plan locked. Pre-implementation decisions confirmed. Repo
+scaffolding in progress. Next: GCC patch v0 + Phase 2 M1 generator
+(parallel tracks).
+
+## Decisions (confirmed by user 2026-05-11)
+
+| # | Decision | Choice |
+|---|---|---|
+| 1 | Build harness | **Buildroot** |
+| 2 | Libc | **musl** |
+| 3 | Demo includes one dynamic library (libc.so) for load-time-failure asciicast | **Yes** |
+| 4 | GCC bootstrap discipline for PoC | **`--disable-bootstrap`** (self-host deferred to v2) |
+| 5 | License | **Apache-2.0** |
+| 6 | Single-distro pilot | **Alpine** (Polyverse already aports-forked it) |
+| 7 | Phase 1 / Phase 2 scheduling | **Parallel** (not series — see plan/05) |
 
 ## What's done
 
@@ -59,52 +73,30 @@
 
 ## What's queued next
 
-### Pre-implementation user decisions (the open questions from the
-previous STATE.md, now refined)
+### Implementation kickoff — parallel tracks
 
-The plan documents bake in strong recommendations. If you want to
-deviate from any of these, push back BEFORE the patch series starts;
-deviation costs less now than at week 3.
+See `plan/05-parallel-tracks.md` for the dependency graph and schedule.
 
-1. **Confirm Buildroot.** Plan/04 assumes it. Alternatives: LFS (too
-   many packages), Yocto (slow iteration), custom Makefile (extra
-   work for no benefit).
-2. **Confirm musl.** Plan/01 M4 assumes it. Glibc is ~20× the asm
-   audit effort (`research/05` §4).
-3. **Confirm dynamic library in the PoC demo.** Plan/04 has the
-   dual-hello demo using *one* dynamic library (libc) to show the
-   load-time failure mode. Alternative: pure static demo with kernel
-   ENOSYS (requires pulling Phase 2 forward). The dual-hello approach
-   is simpler and demos faster.
-4. **Confirm `--disable-bootstrap` for PoC.** Plan/00 §10 documents
-   the gap; Mes/TinyCC self-host is a v2 milestone.
-5. **License: Apache-2.0.** Plan/00 §11 documents the patent posture.
-6. **Single-distro pilot (Alpine).** Plan/00 §9 — explicit reversal of
-   Polyverse's seven-distro mistake.
-7. **Phase split: userland → kernel.** Plan/01 vs plan/02 as separate
-   milestones. Alternative: parallel tracks. Series-first is safer.
+The two starting items that can begin immediately, **simultaneously**:
 
-### Once decisions are confirmed: implementation kickoff
+1. **Track A — GCC patch v0** (`patches/scramble-gcc-v0.patch`).
+   200–400 LOC GCC backend patch adding the `ENCRYPTED_LINUX_ABI`
+   variant: arg-register permutation + symbol mangling. Plan/04 step 1
+   lists the five touchpoints in `gcc/config/i386/i386.cc`. ~1 engineer-
+   week. Demo-able with a hand-written test case before any musl /
+   Buildroot infrastructure exists. Gates Track A milestones M4 onward
+   AND Track B kernel-internal ABI scrambling.
 
-The smallest single deliverable that starts the engineering work is:
+2. **Track B — `unistd_seeded.h` generator** (`scripts/gen-unistd-seeded`).
+   Independent of the GCC patch entirely; needs only the seed file and
+   the canonical `syscall_64.tbl`. Outputs the renumbered kernel
+   header and the kernel-side dispatch table. ~2 engineer-days.
 
-`patches/scramble-gcc-v0.patch` — the 200–400 LOC GCC backend patch
-that adds the `ENCRYPTED_LINUX_ABI` variant with arg-register
-permutation + symbol mangling.
-
-Plan/04 step 1 lists the five touchpoints inside i386.cc. A
-single-engineer week of focused work; demo-able with a
-hand-written test case before any musl/Buildroot infrastructure
-exists.
-
-After that:
-- Week 2 of plan/04: integrate into Buildroot.
-- Weeks 3–4 of plan/04: musl rebuild, busybox, dual-hello demo,
-  asciicast, README update.
-
-Then plan/01 M3 onward (callee-saved permutation, CFI tests, libgcc
-soundness, ELF-note seed tag) — the path to a real Phase 1, not just
-a PoC.
+Suggested starting allocation:
+- If one engineer: Track A first (it unblocks more), Track B in the
+  background.
+- If two engineers: split, sync weekly on the seed-derivation library
+  (shared between both).
 
 ## Reproducing the research (agent IDs may be stale by resume time)
 

@@ -1,0 +1,34 @@
+# Build outputs
+/build/
+/output/
+*.o
+*.a
+*.so
+*.so.*
+
+# Buildroot downloads + dl cache
+/dl/
+/buildroot/dl/
+
+# QEMU disks / images, except the ones we deliberately commit
+*.qcow2
+*.img
+*.iso
+!docs/*.cast
+
+# Patches applied to local checkouts (the source-of-truth lives in patches/)
+/upstream/
+
+# Editors
+*.swp
+.idea/
+.vscode/
+.DS_Store
+
+# Local override of the seed (use ./seed which IS checked in)
+seed.local
+
+# Tooling outputs we regenerate every build
+*.pyc
+__pycache__/
+*.go.sum  # except inline modules

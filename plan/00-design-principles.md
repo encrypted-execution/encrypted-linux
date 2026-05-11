@@ -107,6 +107,13 @@ fail-closed and surface availability as a config flag, not a default.
   themselves and the kernel-internal convention. Static stock binaries
   stop running too.
 
+**Phasing:** Phase 1 and Phase 2 ship as **parallel tracks**, not series
+— see `plan/05-parallel-tracks.md` for the dependency graph. The
+distinction here is about layering of the *defense*, not the order of
+implementation. Several Phase 2 milestones (syscall renumbering generator,
+modversions CRC seed-fold) have no dependency on the GCC patch and can
+ship before Phase 1 is complete.
+
 ## 7. Reuse GCC's existing dual-ABI infrastructure
 
 GCC already carries two complete x86_64 calling conventions
