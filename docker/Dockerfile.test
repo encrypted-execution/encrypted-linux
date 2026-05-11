@@ -16,8 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         binutils \
         openssl \
+        libssl-dev \
+        gcc-13-plugin-dev \
         python3 \
         ca-certificates \
+        make \
     && rm -rf /var/lib/apt/lists/*
 
 # A non-root user keeps file ownership sane when bind-mounting from the host.
@@ -27,5 +30,9 @@ RUN groupadd -g "${GID}" -o builder && useradd -m -u "${UID}" -g "${GID}" -o bui
 USER builder
 WORKDIR /work
 
-# The default command runs the joint smoke test (Track A + Track B).
-CMD ["bash", "-c", "bash scripts/scramble-mangle-test/test.sh && bash scripts/test/test-seed-lib.sh"]
+# The default command runs the joint smoke test (Track A + Track B
+# + the compile-time plugin path).
+CMD ["bash", "-c", "\
+    bash scripts/scramble-mangle-test/test.sh && \
+    bash scripts/test/test-seed-lib.sh && \
+    bash scripts/scramble-mangle-test/test-plugin.sh"]

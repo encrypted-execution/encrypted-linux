@@ -1,9 +1,10 @@
 # encrypted-linux — Current State
 
 **Last updated:** 2026-05-11
-**Phase:** First working code merged to `main`. Joint demo
-end-to-end PASS (19/19 checks). Next: real GCC patch v0 to replace
-the post-compile mangler; Buildroot integration; QEMU boot.
+**Phase:** GCC plugin replaces post-compile mangling for the
+compile-time path. Joint demo end-to-end PASS (31/31 checks across
+three test suites). Next: real GCC backend patch (argument-register
+permutation); Buildroot integration; QEMU boot.
 
 ## Decisions (confirmed by user 2026-05-11)
 
@@ -73,25 +74,40 @@ the post-compile mangler; Buildroot integration; QEMU boot.
 
 ## What's queued next
 
-### Track A — symbol mangling (shipped)
+### Track A — symbol mangling (shipped, two paths)
 
 Symbol mangling is the load-bearing piece of Phase 1 (plan/00 §3).
-PoC scope deliberately scoped down from "real GCC backend patch" to
-"post-compile pass using `objcopy --redefine-syms`" — same observable
-property (load-time `undefined symbol` failure), 1000× less GCC work.
+Now ships in TWO interchangeable forms:
+
+1. **Post-compile pass** (`scripts/scramble-mangle.sh`) — bash + `nm`
+   + `objcopy --redefine-syms`. Operates on any ELF object regardless
+   of how it was compiled. Useful for third-party prebuilt objects
+   and as the reference oracle.
+2. **GCC plugin** (`patches/gcc-plugin-scramble-mangle/`) — ~150 LOC
+   C++. Loaded via `gcc -fplugin=./scramble-mangle.so`. Hooks
+   `PLUGIN_FINISH_DECL` (extern decls, caller side) and
+   `PLUGIN_PRE_GENERICIZE` (function bodies, callee side). Mangles
+   at compile time, before the symbol enters the symbol table.
+
+**Parity verified**: both paths produce byte-identical output. A
+test that mixes plugin-built objects with post-pass-built objects
+links and runs correctly (test-plugin.sh Test 3).
 
 Shipped artifacts:
 - `scripts/seed-lib.sh` — bash HMAC-SHA256 sub-seed derivation
-- `scripts/scramble-mangle.sh` — main mangler
-- `scripts/scramble-mangle-test/` — hello/libthing/main triple, test.sh
-- `docker/Dockerfile.test` — Ubuntu 24.04 image, ~150 MB
+- `scripts/scramble-mangle.sh` — post-compile mangler
+- `patches/gcc-plugin-scramble-mangle/{scramble-mangle.cc,Makefile,README.md}`
+  — compile-time mangler
+- `scripts/scramble-mangle-test/test.sh` — three link cases via post-pass
+- `scripts/scramble-mangle-test/test-plugin.sh` — three link cases via plugin + parity
+- `docker/Dockerfile.test` — Ubuntu 24.04 + `gcc-13-plugin-dev` + `libssl-dev`
 - `docker/Dockerfile.gcc-build` — staged GCC 14 source for the future
-  real patch, ~1.2 GB (image not yet built)
+  real backend patch (~1.2 GB image, not yet built)
 
-Joint demo: `make test` → 5/5 Track A checks PASS. The cross-link case
-fails with `main.c:(.text+0xc): undefined reference to
-\`compute__abi_15e2ce22'\`` — proof of the fail-closed property
-plan/00 §5 requires.
+Joint demo: `make test` → 5/5 (post-pass) + 12/12 (plugin) = 17/17
+Track A checks PASS. Both cross-link cases fail with
+`undefined reference to compute__abi_15e2ce22` — proof of the
+fail-closed property plan/00 §5 requires.
 
 ### Track B — seed-lib + syscall renumbering (shipped)
 
@@ -114,21 +130,25 @@ on stable headline calls: `read 0→853`, `write 1→639`, `openat 257→555`,
 
 ### What unblocks now
 
-With Tracks A and B both green:
+With both Track A paths (post-pass + plugin) and Track B all green:
 - The dual-hello + load-time-failure asciicast (plan/04) is reachable
-  with another ~2 days of work (just wire the existing test into a
-  scripted recording).
-- Phase 2 M2 (consume the renumbered header in musl) is now unblocked
-  (just needs musl source + the existing `unistd_seeded.h` artifact).
+  with another ~2 days of work — the demo binaries are already
+  produced by `make demo-plugin`; just need to record + caption.
+- The plugin is suitable for any C source we control. Building
+  scrambled musl (plan/01 M4) is now mechanical: drop the plugin
+  into musl's CFLAGS via Buildroot's `BR2_TARGET_OPTIMIZATION` knob.
+- Phase 2 M2 (consume the renumbered header in musl) is unblocked
+  (just needs musl source + the existing `unistd_seeded.h`).
 - Phase 2 M4 (modversions CRC seed-fold) is independent and shippable
   next.
 
-The full GCC backend patch (real arg-register permutation, callee-saved
-permutation, ELF-note seed tag) remains the critical-path long-pole —
-plan/01 M1+M3, plan/05 §"What's on the critical path." Now that the
-mangling-only PoC ships, the GCC patch is no longer blocking the
-asciicast; it becomes the gateway to plan/01 M4+ (rebuild musl with
-real ABI scrambling, not just mangling).
+The real GCC **backend** patch — argument-register permutation,
+callee-saved permutation, ELF-note seed tag — remains the
+critical-path long-pole (plan/01 M1+M3). It is what gives us the
+full ABI scrambling that the plugin alone cannot provide. Estimated
+2–4 weeks of dedicated GCC backend work; needs a checkout of GCC 14
+source inside the `encrypted-linux-gcc` Docker image. The plugin
+makes this no longer blocking for the PoC asciicast.
 
 ## Reproducing the research (agent IDs may be stale by resume time)
 

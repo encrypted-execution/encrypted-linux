@@ -1,17 +1,43 @@
 # patches/
 
-Source patches applied to upstream projects.
+Source patches and GCC plugins applied to upstream projects.
+
+## GCC plugins (shipped — no upstream patch needed)
+
+A GCC plugin is just a `.so` loaded via `-fplugin=`. Doesn't require
+patching the GCC source tree. Cheap, demo-able today.
+
+| Directory | Phase | Status | Notes |
+|---|---|---|---|
+| `gcc-plugin-scramble-mangle/` | A2 (mangling) | **shipped** | Compile-time symbol mangling, byte-identical output to `scripts/scramble-mangle.sh`. ~150 LOC C++. |
+
+## Source patches (deferred — none shipped)
+
+These require modifying upstream source trees and rebuilding.
 
 | Patch | Target | Phase | Status |
 |---|---|---|---|
-| `scramble-gcc-v0.patch` | GCC 14 | A1 (Track A) | not started |
-| `scramble-gcc-mangle.patch` | GCC 14 | A2 (Track A) — may merge into v0 | not started |
-| `scramble-gcc-callee-saved.patch` | GCC 14 | A3 (Track A) | not started |
+| `scramble-gcc-v0.patch` | GCC 14 | A1 (arg-register permutation) | not started — real backend patch, multi-week |
+| `scramble-gcc-callee-saved.patch` | GCC 14 | A3 (callee-saved permutation + CFI) | not started |
 | `musl-syscall-stubs.patch` | musl 1.2.x | A4 / B2 (both tracks) | not started |
-| `musl-setjmp-permute.patch` | musl 1.2.x | A4 (Track A — only needed if A3 lands) | not started |
-| `kernel-modversions-seed.patch` | Linux 6.x | B4 (Track B) — one-liner | not started |
-| `kernel-binfmt-elf-note.patch` | Linux 6.x | A6 (Track A) — loader check | not started |
-| `kernel-syscall-seeded.patch` | Linux 6.x | B1+B3 (Track B) | not started |
+| `musl-setjmp-permute.patch` | musl 1.2.x | A4 (only needed if A3 lands) | not started |
+| `kernel-modversions-seed.patch` | Linux 6.x | B4 (one-liner) | not started |
+| `kernel-binfmt-elf-note.patch` | Linux 6.x | A6 (loader check) | not started |
+| `kernel-syscall-seeded.patch` | Linux 6.x | B1+B3 | not started |
+
+## Why a plugin replaces `scramble-gcc-v0.patch` for mangling
+
+Per `research/04` §5: a GCC plugin cannot replace the calling
+convention itself (it runs after target hooks are frozen) but CAN
+cleanly handle symbol mangling via `PLUGIN_FINISH_DECL` +
+`PLUGIN_PRE_GENERICIZE`. The plugin captures all of Phase 1 mangling
+at ~150 LOC C++ — vs. a backend patch which would be ~200–400 LOC
+of `gcc/config/i386/i386.cc` work to add a `TARGET_MANGLE_DECL_
+ASSEMBLER_NAME` hook. The plugin is the right tool for this surface.
+
+The real backend patch (`scramble-gcc-v0.patch`) is still needed for
+argument-register permutation, which is plan/01 M1+M3 work. That
+remains the critical-path long-pole.
 
 See `plan/05-parallel-tracks.md` for the dependency graph and which
 patches gate which downstream work.
