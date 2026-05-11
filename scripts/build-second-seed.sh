@@ -24,9 +24,14 @@ echo "Seed B: ${SEED_B}"
 
 mkdir -p build/image-seedB
 
+# gen-unistd-seeded.py reads from ./seed; swap it temporarily.
+mv seed seed.A.backup
+printf '%s\n' "${SEED_B}" > seed
+trap 'mv seed.A.backup seed' EXIT
+
 # Generate permuted tables for seed B.
-ENCRYPTED_LINUX_SEED="${SEED_B}" python3 scripts/gen-unistd-seeded.py >/dev/null
-ENCRYPTED_LINUX_SEED="${SEED_B}" python3 scripts/gen-kernel-syscall-tbl.py >/dev/null
+python3 scripts/gen-unistd-seeded.py >/dev/null
+python3 scripts/gen-kernel-syscall-tbl.py >/dev/null
 echo "Generated seed-B tables. Sampling renumbering:"
 grep -E "__NR_(read|write|exit_group|set_tid_address) " build/generated/asm/unistd_seeded.h
 

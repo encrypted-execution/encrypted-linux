@@ -1,10 +1,12 @@
 # encrypted-linux — Current State
 
-**Last updated:** 2026-05-11 (evening)
-**Phase:** **QEMU image BOOTS AND RUNS hello.** Cross-host failure
-verified: copying the same hello binary to a stock ubuntu:24.04
-container segfaults (exit 139). Both Phase 1 and Phase 2 demos
-operational. See `docs/DEMO-EVIDENCE.md` for captured output.
+**Last updated:** 2026-05-11 (late evening)
+**Phase:** **Phase 2 demo COMPLETE end-to-end.** Two encrypted-linux
+images (seed A, seed B) both boot, both run their native hello, both
+reject each other's hello. Stock ubuntu also segfaults the seed-A
+hello. Full asciicast at `docs/demo.cast`. See
+`docs/DEMO-EVIDENCE.md` for captured output and
+`docs/IN-VM-GCC-PATH.md` for the still-open in-VM-gcc work item.
 
 ## Decisions (confirmed by user 2026-05-11)
 

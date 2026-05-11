@@ -98,7 +98,67 @@ failure mode varies — Rosetta sometimes prints
 segfaults. All of these are correct: the binary is not portable to
 non-encrypted-linux systems.
 
-## Step 4 — Phase 1 (symbol mangling) failure mode
+## Step 4 — Cross-VM (two seeds) failure mode
+
+A SECOND encrypted-linux image was built with a different master
+seed (`scripts/build-second-seed.sh`). Different seed → different
+permuted syscall numbers in kernel + musl. Same source code, same
+build pipeline, mutually incompatible binaries.
+
+### 4a — Seed-B's own hello on seed-B's kernel (works)
+
+```
+$ gtimeout 30 qemu-system-x86_64 -m 4G \
+    -kernel build/image-seedB/bzImage \
+    -initrd build/image-seedB/rootfs.cpio.gz \
+    -append "console=ttyS0 panic=2 rdinit=/bin/hello" \
+    -nographic -no-reboot -accel tcg
+
+Run /bin/hello as init process
+hello from inside encrypted-linux (seed B)!
+Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000000
+```
+
+(The kernel panic at the end is normal — `/bin/hello` ran as PID 1
+and exited cleanly with rc=0; the kernel doesn't allow init to exit
+under any circumstances, so it panics with exitcode 0x00000000.)
+
+### 4b — Seed-A's hello on seed-B's kernel (fails)
+
+The seed-B initramfs bundles seed-A's hello at `/bin/hello-seedA`
+specifically to demo cross-VM incompatibility.
+
+```
+$ gtimeout 30 qemu-system-x86_64 -m 4G \
+    -kernel build/image-seedB/bzImage \
+    -initrd build/image-seedB/rootfs.cpio.gz \
+    -append "console=ttyS0 panic=2 rdinit=/bin/hello-seedA" \
+    -nographic -no-reboot -accel tcg
+
+Run /bin/hello-seedA as init process
+traps: hello-seedA[1] general protection fault ip:4017de sp:7fff... error:0
+Kernel panic - not syncing: Attempted to kill init! exitcode=0x0000000b
+```
+
+`exitcode=0x0000000b` = 11 = SIGSEGV. The trap address `ip:4017de` is
+the unreachable `hlt` instruction in musl's static_init_tls — musl
+hit that path because an early syscall returned garbage (seed-B kernel
+doesn't recognize seed-A's permuted numbers).
+
+### Syscall mapping comparison
+
+```
+syscall      seed-A      seed-B
+read         853         797
+write        639         13
+arch_prctl   329         140
+exit_group   983         525
+```
+
+Two different cryptographic permutations of the same 365 canonical
+syscalls. A binary from one is gibberish to the other.
+
+## Step 5 — Phase 1 (symbol mangling) failure mode
 
 Separate from the syscall failure: a dynamically-linked binary built
 with the encrypted-linux toolchain references mangled symbol names
@@ -111,12 +171,22 @@ plugin. Both paths produce the same mangled output by design.
 
 ## Summary
 
-| Test | Inside encrypted-linux VM | On stock Linux host |
-|---|---|---|
-| `/bin/hello` (static, scrambled musl, permuted syscalls) | **prints message, exits 0** | **segfaults, exits 139** |
-| Dynamic binary referencing `printf__abi_<hex>` | resolves via scrambled libc | `undefined symbol: printf__abi_<hex>` |
-| Build new program inside VM with `/usr/local-gcc/bin/x86_64-linux-gnu-gcc` | TBD — see STATE.md "Known gaps" | n/a |
+| Test | On its native kernel | On stock Linux | On a different-seed kernel |
+|---|---|---|---|
+| `/bin/hello` (static, scrambled musl, permuted syscalls) | **prints message, exits 0** | **segfaults, exits 139** | **#GP fault, panics** |
+| Dynamic binary referencing `printf__abi_<hex>` | resolves via scrambled libc | `undefined symbol: printf__abi_<hex>` | symbol mismatch |
+| Build new program inside VM with bundled `/usr/local-gcc/` | TODO: requires gcc statically linked to scrambled musl — see `docs/IN-VM-GCC-PATH.md` | n/a | n/a |
 
-The first two rows are the value-prop: code that depends on the
-encrypted-linux environment cannot be moved to a stock environment.
-Phase 1 + Phase 2 of the design (plan/01, plan/02) — proven.
+The first row is the Phase 2 value-prop: code that depends on a specific
+encrypted-linux seed cannot be moved to ANY other environment (stock or
+different-seeded). The second row is the Phase 1 value-prop: dynamic
+binding fails cleanly at load time. Phase 1 + Phase 2 of the design
+(plan/01, plan/02) — proven.
+
+## Asciicast
+
+A complete asciinema recording of the end-to-end demo is at
+`docs/demo.cast`. Replay with:
+```
+asciinema play docs/demo.cast
+```
