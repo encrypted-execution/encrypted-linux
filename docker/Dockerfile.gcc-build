@@ -37,7 +37,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         wget xz-utils ca-certificates \
         git \
         binutils-dev \
-        gcc-multilib \
         python3 \
     && rm -rf /var/lib/apt/lists/*
 

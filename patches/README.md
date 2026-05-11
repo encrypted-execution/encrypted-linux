@@ -11,19 +11,54 @@ patching the GCC source tree. Cheap, demo-able today.
 |---|---|---|---|
 | `gcc-plugin-scramble-mangle/` | A2 (mangling) | **shipped** | Compile-time symbol mangling, byte-identical output to `scripts/scramble-mangle.sh`. ~150 LOC C++. |
 
-## Source patches (deferred — none shipped)
-
-These require modifying upstream source trees and rebuilding.
+## Source patches
 
 | Patch | Target | Phase | Status |
 |---|---|---|---|
-| `scramble-gcc-v0.patch` | GCC 14 | A1 (arg-register permutation) | not started — real backend patch, multi-week |
+| `scramble-gcc-v0.patch` | GCC 14.2.0 | A1 (arg-register permutation) | **shipped** — 84 lines, 9/9 tests PASS |
 | `scramble-gcc-callee-saved.patch` | GCC 14 | A3 (callee-saved permutation + CFI) | not started |
 | `musl-syscall-stubs.patch` | musl 1.2.x | A4 / B2 (both tracks) | not started |
 | `musl-setjmp-permute.patch` | musl 1.2.x | A4 (only needed if A3 lands) | not started |
 | `kernel-modversions-seed.patch` | Linux 6.x | B4 (one-liner) | not started |
 | `kernel-binfmt-elf-note.patch` | Linux 6.x | A6 (loader check) | not started |
 | `kernel-syscall-seeded.patch` | Linux 6.x | B1+B3 | not started |
+
+## How `scramble-gcc-v0.patch` works
+
+Mechanism: externalizes the inline `x86_64_int_parameter_registers[6]`
+table in `gcc/config/i386/i386.cc` to a header at
+`gcc/config/i386/encrypted-linux-perm.h`. The default in-tree header
+contains the canonical SysV order — byte-identical to upstream
+behavior. The build pipeline overwrites the header via
+`scripts/gen-gcc-arg-perm.py` when `ENCRYPTED_LINUX_SEED` is set,
+substituting a Fisher-Yates permutation derived from
+`HMAC-SHA256(seed, "user.abi"/"x86_64.arg_regs")`.
+
+The table has exactly three consumers in GCC's x86 backend
+(`function_arg_64`, `setup_incoming_varargs_64`,
+`ix86_function_arg_regno_p`) — permuting it once at GCC build time
+makes the calling convention internally consistent across caller and
+callee.
+
+Regenerate the patch (if upstream context shifts):
+```
+make gcc-patch
+```
+
+Build the patched cross-compiler:
+```
+make gcc-build      # ~15-30 min
+```
+
+Run the verification test:
+```
+make demo-gcc       # 9 PASS expected
+```
+
+Out of scope for v0: callee-saved permutation, return-register
+choice, stack-frame-layout permutation. The MS_ABI table is
+deliberately left canonical so `__attribute__((ms_abi))` continues
+to interop with Windows binaries.
 
 ## Why a plugin replaces `scramble-gcc-v0.patch` for mangling
 

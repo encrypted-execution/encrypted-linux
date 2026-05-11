@@ -1,0 +1,25 @@
+x86_64: external argument-register table for encrypted-linux ABI scrambling
+
+Externalize x86_64_int_parameter_registers[6] to a generated header so
+a build-time tool (scripts/gen-gcc-arg-perm.py in the encrypted-linux
+repo) can substitute a seed-derived permutation. Default header content
+emits the canonical SysV order, leaving stock builds bit-for-bit
+identical to upstream.
+
+With ENCRYPTED_LINUX_SEED set, the generator emits a permuted table
+derived via:
+    USER_ABI_SEED = HMAC-SHA256(master, "user.abi")
+    ARG_REG_SEED  = HMAC-SHA256(USER_ABI_SEED, "x86_64.arg_regs")
+    perm          = Fisher-Yates([0..5], ARG_REG_SEED)
+
+Every consumer reads the same table (function_arg_64 caller side,
+setup_incoming_varargs_64 callee side, ix86_function_arg_regno_p),
+so a single permutation propagates everywhere.
+
+Out of scope for v0: callee-saved permutation, return-register choice,
+stack frame layout, MS_ABI table (kept canonical for
+__attribute__((ms_abi)) compatibility).
+
+References:
+ - plan/01-phase1-userland-scrambling.md M1
+ - research/04-gcc-calling-convention-internals.md section 2

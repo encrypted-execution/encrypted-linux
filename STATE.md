@@ -1,10 +1,12 @@
 # encrypted-linux — Current State
 
 **Last updated:** 2026-05-11
-**Phase:** GCC plugin replaces post-compile mangling for the
-compile-time path. Joint demo end-to-end PASS (31/31 checks across
-three test suites). Next: real GCC backend patch (argument-register
-permutation); Buildroot integration; QEMU boot.
+**Phase:** Real GCC backend patch shipped and tested — `patches/
+scramble-gcc-v0.patch` (84 lines). Patched GCC produces assembly
+with permuted argument registers exactly matching the seed-derived
+Fisher-Yates permutation. All four shipped artifacts (post-pass,
+plugin, seed-lib+unistd, backend patch) PASS, 40 checks total.
+Next: Buildroot integration; full Phase 1 musl rebuild; QEMU boot.
 
 ## Decisions (confirmed by user 2026-05-11)
 
@@ -128,9 +130,48 @@ Joint demo: `make test` → 14/14 Track B checks PASS. PoC-seed renumbering
 on stable headline calls: `read 0→853`, `write 1→639`, `openat 257→555`,
 `execve 59→448`, `exit_group 231→983`.
 
+### Track A — GCC backend patch (shipped)
+
+Phase 1 M1 (argument-register permutation) — the actual GCC backend
+patch, no longer a plugin or post-pass.
+
+Shipped artifacts:
+- `patches/scramble-gcc-v0.patch` (84 lines) — externalizes
+  `x86_64_int_parameter_registers[6]` in i386.cc to a generated
+  header. Default header is identity (byte-identical to upstream).
+- `scripts/gen-gcc-arg-perm.py` — header generator. Reads master
+  seed, derives `USER_ABI_SEED = HMAC(master, "user.abi")` then
+  `ARG_REG_SEED = HMAC(USER_ABI_SEED, "x86_64.arg_regs")`, applies
+  Fisher-Yates to [0..5].
+- `scripts/build-scramble-gcc.sh` — builds the patched
+  cross-targeting GCC inside `encrypted-linux-gcc` Docker image.
+  Configure: `--target=x86_64-linux-gnu --disable-bootstrap
+  --enable-languages=c --without-headers`. ~15-30 min wall-time.
+- `scripts/scramble-gcc-test/{test.sh,README.md}` — compiles six
+  identity functions, disassembles, verifies each reads its
+  argument from the expected permuted register.
+- `scripts/gen-gcc-patch.sh` + `_apply-gcc-patch.py` +
+  `_gcc-patch-msg.txt` — regenerate the .patch file from inside the
+  staged GCC source (proper context, real line numbers).
+
+PoC-seed permutation:
+```
+arg0 RDI -> RDX    (3-cycle)
+arg1 RSI -> RSI
+arg2 RDX -> RCX    (3-cycle)
+arg3 RCX -> RDI    (3-cycle)
+arg4 R8  -> R8
+arg5 R9  -> R9
+```
+
+Verified: `id0(int a) { return a; }` compiles to `movl %edx, %eax;
+ret` instead of `movl %edi, %eax; ret`. All six identity functions
+read from the seed-derived permuted register. `make demo-gcc` →
+9/9 PASS.
+
 ### What unblocks now
 
-With both Track A paths (post-pass + plugin) and Track B all green:
+With both Track A paths (post-pass + plugin + backend patch) and Track B all green:
 - The dual-hello + load-time-failure asciicast (plan/04) is reachable
   with another ~2 days of work — the demo binaries are already
   produced by `make demo-plugin`; just need to record + caption.
