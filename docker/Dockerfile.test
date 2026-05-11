@@ -1,0 +1,31 @@
+# Dockerfile.test — minimal Linux environment for running the
+# scramble-mangle test on any host (esp. macOS arm64).
+#
+# Image is ~150 MB. Includes gcc, binutils (nm/objcopy/ld), openssl,
+# python3 (so Engineer B's seed-lib.py tests can run in the same image).
+#
+# Usage:
+#   docker build -t encrypted-linux-test -f docker/Dockerfile.test .
+#   docker run --rm -v "$PWD":/work -w /work encrypted-linux-test \
+#       bash scripts/scramble-mangle-test/test.sh
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        binutils \
+        openssl \
+        python3 \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# A non-root user keeps file ownership sane when bind-mounting from the host.
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g "${GID}" -o builder && useradd -m -u "${UID}" -g "${GID}" -o builder
+USER builder
+WORKDIR /work
+
+# The default command runs the joint smoke test (Track A + Track B).
+CMD ["bash", "-c", "bash scripts/scramble-mangle-test/test.sh && bash scripts/test/test-seed-lib.sh"]

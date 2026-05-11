@@ -1,0 +1,70 @@
+# Dockerfile.gcc-build — staging environment for the FUTURE real GCC
+# scrambling patch (`patches/scramble-gcc-v0.patch`, plan/01 M1+A3).
+#
+# This image holds an unpacked GCC 14 source tree ready for patching,
+# plus all the build deps (gmp/mpfr/mpc/isl/texinfo/...). The patch
+# itself is not yet written — see patches/README.md. Once it's written,
+# building inside this image is:
+#
+#   docker build -t encrypted-linux-gcc -f docker/Dockerfile.gcc-build .
+#   docker run --rm -v "$PWD/patches":/patches \
+#       -v "$PWD/build":/build \
+#       encrypted-linux-gcc bash -c '
+#         cd /opt/gcc-14 &&
+#         git apply /patches/scramble-gcc-v0.patch &&
+#         ./configure --target=x86_64-encrypted-linux-musl \
+#                     --prefix=/build/toolchain \
+#                     --disable-bootstrap \
+#                     --disable-multilib \
+#                     --enable-languages=c,c++ &&
+#         make -j$(nproc) && make install
+#       '
+#
+# We deliberately do NOT build GCC inside the Dockerfile (would take
+# 30-60 min and produce a multi-GB image). The image just stages source
+# + build deps so the developer iterates fast.
+#
+# Image size: ~1.2 GB unpacked.
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        flex bison \
+        libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
+        texinfo \
+        wget xz-utils ca-certificates \
+        git \
+        binutils-dev \
+        gcc-multilib \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Stage GCC 14 source. Using the official release tarball (deterministic
+# vs. cloning a moving branch). Note: 100MB+ download.
+ARG GCC_VERSION=14.2.0
+ARG GCC_URL=https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz
+ARG GCC_SHA256=a7b39bc69cbf9e25826c5a60ab26477001f7c08d85cec04bc0e29cabed6f3cc9
+WORKDIR /opt
+RUN wget -q "${GCC_URL}" -O gcc.tar.xz && \
+    echo "${GCC_SHA256}  gcc.tar.xz" | sha256sum -c - && \
+    tar -xJf gcc.tar.xz && \
+    mv gcc-${GCC_VERSION} gcc-14 && \
+    rm gcc.tar.xz
+
+# Pre-fetch GCC's own deps script artefact (idempotent — no-op if already
+# bundled in the tarball, but cheap insurance for offline patch builds).
+RUN cd /opt/gcc-14 && ./contrib/download_prerequisites || true
+
+# Convenience: a writable workdir for build outputs bind-mounted from
+# the host.
+WORKDIR /build
+
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g "${GID}" -o builder && useradd -m -u "${UID}" -g "${GID}" -o builder \
+    && chown -R builder:builder /opt/gcc-14
+USER builder
+
+CMD ["/bin/bash"]
