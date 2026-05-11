@@ -64,7 +64,6 @@ if [ -d /work/build/native-gcc/install ]; then
     echo "Bundling scrambling GCC from /work/build/native-gcc/install..."
     cp -a /work/build/native-gcc/install "${ROOT}/usr/local-gcc"
     # Bundle the glibc files gcc needs to dlopen at runtime.
-    # Find libc.so.6, ld-linux*, libgcc_s.so.1 from the build container.
     for libname in libc.so.6 ld-linux-x86-64.so.2 libdl.so.2 libm.so.6 \
                    libpthread.so.0 librt.so.1 libstdc++.so.6 libz.so.1 \
                    libmpc.so.3 libmpfr.so.6 libgmp.so.10 libisl.so.23 \
@@ -76,13 +75,35 @@ if [ -d /work/build/native-gcc/install ]; then
             fi
         done
     done
-    # Set up loader symlink the kernel-loaded ELFs use.
     mkdir -p "${ROOT}/lib64"
     ln -sf /lib/ld-linux-x86-64.so.2 "${ROOT}/lib64/ld-linux-x86-64.so.2"
-    # Symlink gcc into PATH.
-    ln -sf /usr/local-gcc/bin/x86_64-linux-gnu-gcc "${ROOT}/bin/gcc"
+
+    # Bundle musl sysroot (headers + libs + crt files) so the in-VM gcc
+    # can actually compile C programs against the (permuted-syscall) musl.
+    echo "Bundling musl sysroot..."
+    mkdir -p "${ROOT}/sysroot/usr"
+    cp -a /work/build/image/sysroot/usr/include "${ROOT}/sysroot/usr/include"
+    cp -a /work/build/image/sysroot/usr/lib     "${ROOT}/sysroot/usr/lib"
+
+    # Wrapper /bin/gcc that drives the scrambling GCC + musl sysroot.
+    cat > "${ROOT}/bin/gcc" <<'GCCWRAP'
+#!/bin/busybox sh
+# In-VM scrambling-GCC wrapper. Drives the native x86_64 scrambling
+# compiler against the permuted-syscall musl sysroot in /sysroot.
+exec /usr/local-gcc/bin/x86_64-linux-gnu-gcc \
+    -static \
+    -nostdinc \
+    -isystem /sysroot/usr/include \
+    -B /sysroot/usr/lib \
+    -L /sysroot/usr/lib \
+    -nostartfiles \
+    /sysroot/usr/lib/crt1.o /sysroot/usr/lib/crti.o \
+    "$@" \
+    /sysroot/usr/lib/crtn.o \
+    -lc
+GCCWRAP
+    chmod +x "${ROOT}/bin/gcc"
     ln -sf /usr/local-gcc/bin/x86_64-linux-gnu-cpp "${ROOT}/bin/cpp"
-    ln -sf /usr/local-gcc/libexec/gcc/x86_64-linux-gnu/14.2.0/cc1 "${ROOT}/usr/bin/cc1" 2>/dev/null || true
 fi
 
 # init script. Behavior selectable via kernel cmdline el_demo=auto:
@@ -109,17 +130,32 @@ if /bin/busybox echo "${CMDLINE}" | /bin/busybox grep -q "el_demo=auto"; then
     /bin/hello
     rc=$?
     echo "[el_demo=auto] /bin/hello exited with rc=${rc}"
-    echo "[el_demo=auto] /bin/hello details:"
-    /bin/busybox file /bin/hello 2>/dev/null
-    /bin/busybox stat /bin/hello | /bin/busybox grep -E "Size|Modify"
-    echo "[el_demo=auto] running 'uname -r' as a 2nd syscall test:"
-    /bin/busybox uname -a
     echo "[el_demo=auto] PASS - VM reached userspace and ran hello"
-    echo "[el_demo=auto] halting"
+    /bin/busybox poweroff -f
+elif /bin/busybox echo "${CMDLINE}" | /bin/busybox grep -q "el_demo=compile"; then
+    echo "[el_demo=compile] verifying in-VM scrambling GCC + musl sysroot..."
+    /bin/busybox ls -la /bin/gcc /usr/local-gcc/bin/x86_64-linux-gnu-gcc 2>&1 | /bin/busybox head -3
+    /bin/busybox cat /src/hello.c
+    echo
+    echo "[el_demo=compile] compiling /src/hello.c with /bin/gcc..."
+    /bin/gcc /src/hello.c -o /tmp/myhello 2>&1
+    cc_rc=$?
+    if [ "${cc_rc}" -ne 0 ]; then
+        echo "[el_demo=compile] FAIL - compile failed rc=${cc_rc}"
+        /bin/busybox poweroff -f
+    fi
+    echo "[el_demo=compile] compile OK. running /tmp/myhello..."
+    /tmp/myhello
+    rc=$?
+    echo "[el_demo=compile] /tmp/myhello exited with rc=${rc}"
+    /bin/busybox file /tmp/myhello 2>&1 || /bin/busybox ls -la /tmp/myhello
+    echo "[el_demo=compile] PASS - in-VM compile + execute works"
     /bin/busybox poweroff -f
 else
-    echo "Try:  /bin/hello"
-    echo "Then: exit (Ctrl-A X in QEMU) and run scripts/test-cross-host-failure.sh"
+    echo "Try:  /bin/hello              (pre-built static)"
+    echo "      /bin/gcc /src/hello.c -o /tmp/myhello   (in-VM compile)"
+    echo "      /tmp/myhello"
+    echo "Then: exit (Ctrl-A X in QEMU) and copy /tmp/myhello off for cross-host test."
     echo
     exec /bin/busybox sh +m
 fi
