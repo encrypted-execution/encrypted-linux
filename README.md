@@ -45,6 +45,43 @@ compiled INSIDE the encrypted-linux VM!
   -> exit 0
 ```
 
+### v3 additions (research/08 ideas 1, 4, 6)
+
+Three additional MTD defenses are layered on top of the v2 stack and
+verified booting in QEMU:
+
+```
+$ bash scripts/build-v3-image.sh             # ~15 min
+$ gtimeout 90 qemu-system-x86_64 -m 4G \
+      -kernel build/v3/bzImage \
+      -initrd build/v3/rootfs.cpio.gz \
+      -append "console=ttyS0 panic=5 loglevel=3 el_demo=auto" \
+      -nographic -no-reboot -accel tcg
+```
+
+Sample boot output:
+
+```
+[v3] /bin/hello (stamped OSABI):
+hello from encrypted-linux V3 (overkill + errno + OSABI + /proc)!
+errno after open(/nonexistent): 88
+  (canonical ENOENT=2; if you see something else, errno is permuted)
+  -> exit 0
+
+[v3] /bin/hello-stock-osabi (canonical OSABI=0):
+/bin/hello-stock-osabi: line 1: ELF: not found            # kernel ENOEXEC
+  -> exit 2
+
+[v3] /proc/self/status (renamed fields):
+Raths246:    1312 kB                                       # was VmPeak
+Jubjub098:   1312 kB                                       # was VmSize
+Galumph168:   516 kB                                       # was VmHWM
+Zibble023:    516 kB                                       # was VmRSS
+Fnord178:      24 kB                                       # was VmData
+Chortled161:  132 kB                                       # was VmStk
+Frob213:      932 kB                                       # was VmExe
+```
+
 ## The full scrambling stack
 
 Every defense layer is seed-derived from a single `./seed` file via
@@ -58,6 +95,9 @@ distinct HMAC-SHA256 labels. The stack:
 | **GCC argument-register ABI** | `gcc/config/i386/i386.cc` patched to externalize `x86_64_int_parameter_registers[6]` to a seed-permuted header. First arg moves from `%rdi` to whatever the seed says. | `user.abi` + `x86_64.arg_regs` | 6! = 720 permutations |
 | **Symbol mangling** | Every external C function gets `__abi_<8hex>` suffixed via GCC plugin OR objcopy post-pass. Stock binaries can't link against scrambled libs. | `user.abi` (per symbol) | per-symbol unique |
 | **ELF entry bridge** | musl's `_start` patched: `mov %rsp, %r<X>` where X is the seed's arg0 register. Bridges kernel→userspace canonical handoff to the scrambling-GCC's permuted C ABI. | (uses `user.abi`) | matches GCC |
+| **Errno permutation** (v3) | UAPI `asm-generic/errno{,-base}.h` and musl's `bits/errno.h` replaced with a Fisher-Yates permutation of POSIX errno values. POSIX guarantees names, not numbers. | `kernel.errno` | 133! permutations (`>10²²⁵`) |
+| **ELF EI_OSABI gate** (v3) | Per-build byte (64-255) stamped into byte 7 of every shipping ELF. `binfmt_elf.c` patched to `return -ENOEXEC` if the byte doesn't match. | `elf.osabi` | 192 values |
+| **/proc/[pid]/status field rename** (v3) | `fs/proc/task_mmu.c` literals rewritten: `VmPeak` → `Raths246`, `VmRSS` → `Zibble023`, etc. Fingerprinting/privesc tooling that scrapes `/proc` breaks. | `kernel.proc_schema` | per-field seed-derived |
 
 ### What each defends against
 
@@ -65,6 +105,9 @@ distinct HMAC-SHA256 labels. The stack:
 - **Randstruct** — attacker with a kernel write-where can't set `cred->uid = 0` because they don't know `uid`'s offset inside `struct cred`.
 - **Symbol mangling** — attacker can't `LD_PRELOAD` a malicious `libc.so` with a `printf` override; the host binary doesn't reference `printf`, it references `printf__abi_<hex>`.
 - **Register-ABI permutation** — even if attacker constructs a ROP chain inside the scrambled libc, the gadgets' calling convention is wrong; `pop %rdi; ret` no longer loads arg0.
+- **Errno permutation** (v3) — exploit payloads that branch on errno values (e.g., `if (errno == EACCES) try_other_path()`) take the wrong branch; libc error-string tables look like garbage; CVE PoC scripts that grep for `ENOSYS` or `EPERM` in dmesg miss everything.
+- **ELF EI_OSABI gate** (v3) — any binary not stamped by this build's `scripts/stamp-elf-osabi.py` is rejected at exec time by the kernel. Stock-distro tools (`/bin/sh`, `python3`, attacker-uploaded ELFs) all fail before the loader runs.
+- **/proc field rename** (v3) — process/memory-info-scraping tooling (privesc enumerators like `linpeas`, observability agents, fingerprinting scripts) sees an unknown schema and either errors out or reports zero/blank fields.
 
 ### What it doesn't defend against (honest framing)
 

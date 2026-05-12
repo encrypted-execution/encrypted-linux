@@ -198,7 +198,18 @@ from encrypted-linux v1. That's the gap.
 These are sketched at the level of "could a competent kernel engineer
 implement this in a quarter," with attacker-cost stories and tradeoffs.
 
-### Idea 1 — Per-build ELF format extension (the "Mach-O move")
+### Idea 1 — Per-build ELF format extension (the "Mach-O move")  ✅ SHIPPED (v3)
+
+> **Status:** implemented as a single-byte `EI_OSABI` gate (not the full
+> `PT_<random>`-segment proposal below). `scripts/gen-elf-osabi.py`
+> derives a per-build byte in `[64, 255]`; `scripts/stamp-elf-osabi.py`
+> rewrites byte 7 of every shipping ELF; `apply-v3-kernel-patches.py`
+> patches `fs/binfmt_elf.c::load_elf_binary` to `return -ENOEXEC` if
+> `elf_ex->e_ident[EI_OSABI]` doesn't match. Verified end-to-end:
+> a canonical-OSABI hello bundled into the same initramfs is rejected
+> at exec time while the stamped hello runs normally. The
+> `PT_<random>`-segment escalation remains future work.
+
 
 **What.** Choose per-build random `e_ident[EI_OSABI]` (256-valued,
 mostly unassigned), a `PT_<random>` program-header in the
@@ -245,7 +256,20 @@ chain generation.
 per-process duplication (~tens of KB, not the full 30MB if `.text`
 stays shared). **Medium effort; high impact.**
 
-### Idea 4 — Per-build /proc schema
+### Idea 4 — Per-build /proc schema  ✅ SHIPPED (v3, partial)
+
+> **Status:** v1 of the defense implemented as field-name rewrites in
+> `fs/proc/task_mmu.c` for the eight most-fingerprinted `Vm*` fields.
+> `scripts/gen-proc-rename.py` picks per-build replacement words from
+> a Jabberwocky-style pool keyed by `HMAC(seed, "kernel.proc_schema")`;
+> `apply-v3-kernel-patches.py` runs the resulting sed script.
+> Verified in a QEMU boot: `/proc/self/status` shows `Raths246:`,
+> `Jubjub098:`, `Galumph168:`, `Zibble023:`, `Fnord178:`,
+> `Chortled161:`, `Frob213:`, `Splanck161:` in place of the canonical
+> Vm* names. Full `/proc/[pid]/stat` field reordering and
+> `/proc/[pid]/maps` reformatting (the bulk of the original proposal)
+> remain future work.
+
 
 **What.** `/proc/[pid]/maps`, `/proc/[pid]/status`, `/proc/[pid]/stat`
 have standardized field orderings every Linux post-exploitation tool
@@ -276,7 +300,18 @@ and every `execve("/bin/sh", ...)` payload fail.
 stacked FS (~500 LoC, cleaner). Introspection / mount tooling /
 namespaces all break. **High effort; very high impact.** Defer to v3.
 
-### Idea 6 — Per-build errno permutation
+### Idea 6 — Per-build errno permutation  ✅ SHIPPED (v3)
+
+> **Status:** implemented as a Fisher-Yates permutation of canonical
+> errno values 1-133, keyed by `HMAC(seed, "kernel.errno")`.
+> `scripts/gen-errno-permutation.py` emits drop-in replacements for
+> the kernel UAPI `asm-generic/errno{,-base}.h` headers and for
+> musl's `arch/generic/bits/errno.h`. Both kernel and libc share the
+> same permutation. Verified in a QEMU boot: `open("/nonexistent")`
+> reports `errno=88` instead of canonical `ENOENT=2`. Aliases
+> (`EWOULDBLOCK=EAGAIN`, `EDEADLOCK=EDEADLK`, `ENOTSUP=EOPNOTSUPP`)
+> preserved so the standard-library compile is a true drop-in.
+
 
 **What.** POSIX requires *names* (EAGAIN, ENOENT) but the *numeric
 values* are implementation-defined ([POSIX](https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html)).
@@ -464,21 +499,25 @@ limitations of multi-axis MTD:
 Order by (impact / effort), highest first. Tractable in the next
 research cycle:
 
-1. **Idea 6 — errno permutation.** ~50 LoC header generation, real
-   defensive value, breaks nothing if the closure-of-build invariant
-   already holds. **Ship in v2.**
-2. **Idea 1 — ELF format extension.** ~250 LoC across `binfmt_elf` and
-   the linker. The Mach-O move. **Ship in v2.**
-3. **Idea 9 — vDSO mangling.** ~100 LoC in `arch/x86/entry/vdso/`.
-   Composes cleanly with v1 symbol mangling. **Ship in v2.**
-4. **Idea 7 — filesystem magic numbers.** ~30 LoC. Free win.
-5. **Idea 8 — HZ + scheduler quanta.** Kconfig knobs already exist.
-6. **Idea 4 — /proc schema permutation.** ~1000 LoC; defer to v2.1.
-7. **Idea 3 — per-process libc.** Significant memory cost; defer to v3.
-8. **Idea 5 — VFS path translation.** Highest impact, hardest engineering;
-   v3 or research project.
-9. **Idea 10 — `task_struct` indirection.** Hot-path cost; v3, gated on
-   performance budget.
+1. **Idea 6 — errno permutation.** ✅ **SHIPPED (v3).** ~50 LoC header
+   generation; verified in QEMU (open returns permuted ENOENT).
+2. **Idea 1 — ELF format extension.** ✅ **SHIPPED (v3, v1 form).**
+   EI_OSABI single-byte gate (192 values). Full `PT_<random>`-segment
+   variant deferred.
+3. **Idea 4 — /proc schema permutation.** ✅ **SHIPPED (v3, partial).**
+   8 fingerprinted `Vm*` fields in `task_mmu.c` renamed. Full
+   `/proc/[pid]/stat` reordering deferred.
+4. **Idea 9 — vDSO mangling.** ~100 LoC in `arch/x86/entry/vdso/`.
+   Composes cleanly with v1 symbol mangling. **Next.**
+5. **Idea 7 — filesystem magic numbers.** ~30 LoC. Free win.
+6. **Idea 8 — HZ + scheduler quanta.** Kconfig knobs already exist.
+7. **Idea 2 — `binfmt_misc` envelope.** Trivial; defense-in-depth over
+   the EI_OSABI gate already shipped.
+8. **Idea 3 — per-process libc.** Significant memory cost; defer to v4.
+9. **Idea 5 — VFS path translation.** Highest impact, hardest engineering;
+   v4 or research project.
+10. **Idea 10 — `task_struct` indirection.** Hot-path cost; v4, gated on
+    performance budget.
 
 The cumulative effect of axes 1–5 above is roughly: **a stock attacker's
 shellcode payload fails at `execve` (idea 1), again at the magic-bytes
