@@ -17,8 +17,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-echo "=== Step 1: generate 64-bit overkill headers ==="
+echo "=== Step 1a: generate 64-bit overkill syscall headers ==="
 python3 scripts/gen-overkill-syscalls.py >/dev/null
+echo "=== Step 1b: generate kernel randstruct seed ==="
+python3 scripts/gen-randstruct-seed.py >/dev/null
 head -5 build/generated/asm/el_syscall_lookup.h
 echo "..."
 grep -E "0x[0-9a-f]+ULL.*write |0x[0-9a-f]+ULL.*read |0x[0-9a-f]+ULL.*execve " \
@@ -33,17 +35,29 @@ set -euo pipefail
 cd /work
 
 echo "================================================="
-echo "=== Build kernel with overkill lookup patch ==="
+echo "=== Build kernel with overkill lookup + randstruct ==="
 echo "================================================="
-cd /opt/linux
 
-# Reset to canonical syscall_64.tbl (in case previous runs replaced it).
-# The image-build container has the upstream .tbl built into /opt/linux already.
+# gcc-plugin-dev is needed for CONFIG_GCC_PLUGIN_RANDSTRUCT_*.
+# Enable Ubuntu universe (where gcc-13-plugin-dev lives) first.
+echo "=== Install gcc-13-plugin-dev (for randstruct) ==="
+sed -i 's/Components: main$/Components: main universe/' \
+    /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
+apt-get update -qq >/dev/null 2>&1
+apt-get install -y --no-install-recommends gcc-13-plugin-dev >/dev/null
+
+cd /opt/linux
 
 # Apply our kernel patch (installs lookup header + patches common.c).
 KERNEL_SRC=/opt/linux \
 LOOKUP_HEADER_SRC=/work/build/generated/asm/el_syscall_lookup.h \
     python3 /work/scripts/apply-kernel-overkill.py
+
+# Install our deterministic randstruct seed so struct-layout
+# randomization is per-encrypted-linux-build reproducible.
+echo "=== Install randstruct seed ==="
+cp /work/build/generated/randstruct.seed scripts/gcc-plugins/randstruct.seed
+echo "  $(head -c 16 scripts/gcc-plugins/randstruct.seed)..."
 
 # Standard kernel config (tinyconfig + serial/init essentials, same as before).
 make mrproper >/dev/null 2>&1 || make distclean >/dev/null 2>&1 || true
@@ -55,6 +69,13 @@ CONFIG_BLK_DEV_INITRD=y
 CONFIG_RD_GZIP=y
 CONFIG_BINFMT_ELF=y
 CONFIG_BINFMT_SCRIPT=y
+# GCC plugins + randstruct full mode (Linux struct layout randomization).
+CONFIG_HAVE_GCC_PLUGINS=y
+CONFIG_GCC_PLUGINS=y
+CONFIG_GCC_PLUGIN_RANDSTRUCT=y
+# CONFIG_RANDSTRUCT_NONE is not set
+CONFIG_RANDSTRUCT_FULL=y
+CONFIG_RANDSTRUCT=y
 CONFIG_PRINTK=y
 CONFIG_EARLY_PRINTK=y
 CONFIG_SERIAL_8250=y
@@ -67,6 +88,14 @@ CONFIG_TMPFS=y
 # CONFIG_X86_X32_ABI is not set
 KC
 make olddefconfig >/dev/null 2>&1
+# Verify randstruct survived the choice resolution; if not, force via scripts/config.
+if ! grep -q "^CONFIG_RANDSTRUCT_FULL=y" .config; then
+    scripts/config --disable RANDSTRUCT_NONE
+    scripts/config --enable RANDSTRUCT_FULL
+    yes "" | make oldconfig >/dev/null 2>&1
+fi
+echo "Effective randstruct config:"
+grep -E "^CONFIG_(GCC_PLUGIN|RANDSTRUCT)" .config | head -6
 echo "=== Building bzImage ==="
 make -j$(nproc) bzImage 2>&1 | tail -3
 cp arch/x86/boot/bzImage /work/build/overkill/bzImage
