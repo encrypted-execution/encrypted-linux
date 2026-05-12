@@ -47,6 +47,15 @@ manual trigger or weekly schedule.
 - `.github/workflows/` — CI definitions
 - `seed`, `SEED.md`, `LICENSE`, `Makefile`, `README.md`, `STATE.md`
 
+## Backlog (deferred design work)
+
+- **Seed hardening** (`plan/06-seed-hardening.md`) — make the seed
+  cryptographically undiscoverable rather than recoverable-but-unique.
+  Five options ranked by cost; per-binary diversification (Option 1)
+  is the suggested first step. The PoC deliberately ships with a
+  plaintext seed; this plan opens the door to layering on
+  cryptographic concealment.
+
 ## What's NOT here (deferred)
 
 - **Module ABI tied to seed via modversions CRC** (plan/02 M4) — a
