@@ -1,12 +1,35 @@
 # encrypted-linux — Current State
 
-**Last updated:** 2026-05-12 (early morning)
-**Phase:** **64-bit OVERKILL syscall scrambling works end-to-end.**
-Brute-force search space went from 2¹⁰ to 2⁶⁴ per syscall.
+**Last updated:** 2026-05-12 (morning)
+**Phase:** **ALL ORIGINAL SPEC ACHIEVED — in-VM GCC compiles working
+binaries on the overkill kernel.**
 
-Image at `build/overkill/`. `bash scripts/run-overkill-demo.sh`.
+```
+[step 1] /bin/hello (pre-built):
+hello from encrypted-linux OVERKILL (64-bit syscalls)!
+[step 2] gcc /src/hello.c -o /tmp/myhello -> compile OK
+[step 3] /tmp/myhello -> compiled INSIDE the encrypted-linux VM!
+```
 
-Earlier achievement: Phase 1 + Phase 2 integrated end-to-end.
+How: Alpine's pre-built gcc binary is dynamically linked against
+musl. We bundle Alpine's gcc + libstdc++ + libgcc + binutils + all
+transitive deps, and substitute `/lib/ld-musl-x86_64.so.1` with our
+OVERKILL musl. Every libc call from gcc/cc1/as/ld goes through our
+scrambled syscall numbers. The resulting in-VM-compiled binaries
+also link against our overkill musl and use overkill syscalls.
+
+Boot:
+```
+bash scripts/run-overkill-demo.sh   # or:
+gtimeout 120 qemu-system-x86_64 -m 4G \
+    -kernel build/overkill/bzImage \
+    -initrd build/overkill/rootfs-gcc.cpio.gz \
+    -append 'console=ttyS0 panic=5 loglevel=3 el_demo=auto' \
+    -nographic -no-reboot -accel tcg
+```
+
+Earlier achievement: Phase 1 + Phase 2 integrated end-to-end + 64-bit
+overkill syscall scrambling.
 
 Hello binary `build/image/hello-phase1plus2` carries:
 - Phase 1: argument-register permutation in calls to libc (verified
