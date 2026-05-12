@@ -60,18 +60,15 @@ def apply_elf_osabi():
         print(f"  ELF OSABI: binfmt_elf.c already patched")
         return
 
-    # Add the include after the last existing #include in the file's
-    # header block. Find the first line that's not #include / blank /
-    # comment near the top.
+    # Insert the include right after the first existing #include.
+    # Simpler than the negative-lookahead approach that didn't work.
     new_include = '#include <linux/encrypted_linux_osabi.h>\n'
-    # Insert after the existing #include block.
-    txt = re.sub(
-        r'(#include\s+<[^>]+>\n)(?!.*#include\s+<[^>]+>\n)',
-        rf'\1{new_include}',
-        txt,
-        count=1,
-        flags=re.DOTALL,
-    )
+    first_include = re.search(r'^#include\s+<[^>]+>\s*\n', txt, re.MULTILINE)
+    if first_include:
+        ins_at = first_include.end()
+        txt = txt[:ins_at] + new_include + txt[ins_at:]
+    else:
+        txt = new_include + txt
 
     # Now add the OSABI check in load_elf_binary. The function starts
     # with `static int load_elf_binary(struct linux_binprm *bprm)`. We
