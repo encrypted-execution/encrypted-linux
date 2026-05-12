@@ -58,10 +58,20 @@ int main(void) {
 HC
 chmod 0644 "${ROOT}/src/hello.c"
 
-# Include the native scrambling GCC if it's been built (optional —
-# image works without it; demo can run pre-compiled hello).
-if [ -d /work/build/native-gcc/install ]; then
-    echo "Bundling scrambling GCC from /work/build/native-gcc/install..."
+# Prefer the static-musl-linked GCC if it's been built — it actually
+# works inside our permuted-kernel VM. Fall back to the native glibc-
+# linked GCC (doesn't work in-VM but useful as bundled artifact).
+if [ -d /work/build/static-gcc/install ] && \
+   [ -x /work/build/static-gcc/install/bin/x86_64-linux-musl-gcc ]; then
+    echo "Bundling STATIC-musl scrambling GCC (works inside VM)..."
+    cp -a /work/build/static-gcc/install "${ROOT}/usr/local-gcc"
+    # Symlink the gcc command-name (alpine uses x86_64-linux-musl-).
+    mkdir -p "${ROOT}/usr/bin"
+    if [ -x "${ROOT}/usr/local-gcc/bin/x86_64-linux-musl-gcc" ]; then
+        ln -sf /usr/local-gcc/bin/x86_64-linux-musl-gcc "${ROOT}/usr/bin/gcc-musl"
+    fi
+elif [ -d /work/build/native-gcc/install ]; then
+    echo "Bundling glibc-linked scrambling GCC (segfaults in-VM, included for inspection)..."
     cp -a /work/build/native-gcc/install "${ROOT}/usr/local-gcc"
     # Bundle the glibc files gcc needs to dlopen at runtime.
     for libname in libc.so.6 ld-linux-x86-64.so.2 libdl.so.2 libm.so.6 \

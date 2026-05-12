@@ -1,12 +1,25 @@
 # encrypted-linux — Current State
 
-**Last updated:** 2026-05-11 (late evening)
-**Phase:** **Phase 2 demo COMPLETE end-to-end.** Two encrypted-linux
-images (seed A, seed B) both boot, both run their native hello, both
-reject each other's hello. Stock ubuntu also segfaults the seed-A
-hello. Full asciicast at `docs/demo.cast`. See
-`docs/DEMO-EVIDENCE.md` for captured output and
-`docs/IN-VM-GCC-PATH.md` for the still-open in-VM-gcc work item.
+**Last updated:** 2026-05-11 (night)
+**Phase:** **Phase 1 + Phase 2 BOTH INTEGRATED end-to-end.**
+
+Hello binary `build/image/hello-phase1plus2` carries:
+- Phase 1: argument-register permutation in calls to libc (verified
+  via objdump — fd=1 in %edx instead of %edi, count=40 in %ecx
+  instead of %edx)
+- Phase 2: permuted syscall numbers baked into musl
+
+Inside the VM with matching kernel: prints
+`hello from encrypted-linux (Phase 1+2)!`
+On stock ubuntu: segfaults (exit 139)
+On a different-seed VM kernel: #GP fault (exitcode 0x0000000b)
+
+The only remaining gap from the original 4-item list is the in-VM
+gcc binary (run a NEW compile inside the VM). The static-against-
+permuted-musl GCC build is documented in `docs/IN-VM-GCC-PATH.md`
+and got partway (configure works, sub-configure tests fail under
+`make LDFLAGS=-static` propagation). musl-cross-make-style wrapper
+is the proper fix.
 
 ## Decisions (confirmed by user 2026-05-11)
 

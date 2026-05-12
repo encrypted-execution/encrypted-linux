@@ -1,0 +1,40 @@
+# Dockerfile.gcc-static-musl — Alpine-based build environment for
+# producing a SCRAMBLING GCC statically linked against musl.
+#
+# Why Alpine: ships musl + g++/gcc-linked-against-musl out of the box.
+# When we then replace Alpine's musl with our PERMUTED musl before
+# building gcc, the resulting gcc binary is statically linked against
+# our permuted musl and uses our permuted syscall numbers.
+#
+# That gcc can run inside the encrypted-linux QEMU image (whose kernel
+# also has the permuted syscall table) without needing glibc loaders
+# or canonical syscalls.
+#
+# Image size: ~600 MB.
+
+FROM --platform=linux/amd64 alpine:3.20
+
+RUN apk add --no-cache \
+        build-base \
+        flex bison \
+        gmp-dev mpfr-dev mpc1-dev isl-dev \
+        texinfo \
+        wget xz tar bash \
+        ca-certificates \
+        python3 \
+        linux-headers \
+        zlib-dev zlib-static
+
+# Stage GCC 14 source.
+ARG GCC_VERSION=14.2.0
+ARG GCC_URL=https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz
+ARG GCC_SHA256=a7b39bc69cbf9e25826c5a60ab26477001f7c08d85cec04bc0e29cabed6f3cc9
+WORKDIR /opt
+RUN wget -q "${GCC_URL}" -O gcc.tar.xz && \
+    echo "${GCC_SHA256}  gcc.tar.xz" | sha256sum -c - && \
+    tar -xJf gcc.tar.xz && \
+    mv gcc-${GCC_VERSION} gcc-14 && \
+    rm gcc.tar.xz
+
+WORKDIR /work
+CMD ["/bin/bash"]
