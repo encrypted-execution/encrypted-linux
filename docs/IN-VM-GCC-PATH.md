@@ -1,4 +1,12 @@
-# Path to a working in-VM GCC (TODO for next iteration)
+# Path to a working in-VM GCC (RESOLVED — kept for historical reference)
+
+**Status: SOLVED via a much simpler path than originally documented.**
+This file is preserved to explain the FAILED approaches and the
+INSIGHT that resolved it. The current working solution lives in
+`scripts/assemble-overkill-gcc-initramfs.sh` and is described at the
+end of this file.
+
+## The dead-end path
 
 The current encrypted-linux image bundles a native x86_64 scrambling GCC
 at `/usr/local-gcc/`. When invoked inside the VM it segfaults during
@@ -97,3 +105,79 @@ in the separate test suites.
 The integration is mechanical once the bootstrap lands; it doesn't
 require new design work. Logging here so the next engineer can pick
 it up cleanly.
+
+---
+
+## The actual solution (shipped)
+
+**Insight that changed everything:** GCC doesn't issue syscalls
+directly. It calls libc *symbols* (`write`, `mmap`, ...). The syscall
+numbers live inside libc's code, not in gcc. So if we substitute
+`/lib/ld-musl-x86_64.so.1` (the system dynamic loader) with our
+overkill musl, any dynamically-linked program — gcc included — uses
+overkill syscalls automatically. No recompile of gcc required.
+
+This sidesteps the entire libgcc-against-musl bootstrap problem.
+
+### Implementation
+
+`scripts/assemble-overkill-gcc-initramfs.sh`:
+
+1. Bundle Alpine's pre-built gcc + binutils + libgcc.a + libstdc++ +
+   mpfr + mpc + gmp + isl + zlib + libssp + libbfd + libopcodes + ...
+   (~170 MB of toolchain extracted via apk in a fresh Alpine
+   container).
+2. Substitute the dynamic loader: copy our overkill `libc.so` to
+   `/lib/ld-musl-x86_64.so.1` in the rootfs.
+3. Install the matching musl static-link sysroot (`libc.a`, headers,
+   crt files) at `/sysroot/` so gcc-compiled programs link correctly.
+
+When the kernel maps gcc's ELF:
+- `PT_INTERP` says `/lib/ld-musl-x86_64.so.1` — that's our overkill musl
+- Loader resolves gcc's symbol bindings against our overkill `libc.so`
+- Every syscall from gcc/cc1/as/ld uses overkill numbers
+- All work fine on our overkill kernel
+
+For programs compiled inside the VM (`gcc /src/hello.c`):
+- gcc links against our `libc.a` at `/sysroot/usr/lib/libc.a`
+- Result: static binary with overkill syscalls baked in
+- Same cross-host failure behavior as pre-built hello
+
+Verified end-to-end:
+```
+[step 2] compile /src/hello.c inside VM:
+  $ gcc /src/hello.c -o /tmp/myhello
+  compile OK
+[step 3] run the in-VM-compiled binary:
+compiled INSIDE the encrypted-linux VM!
+  -> exit 0
+```
+
+### Build complications resolved during integration
+
+- `gcc-13-plugin-dev` is in Ubuntu's `universe` component (not `main`)
+  — patched `sources.list.d/ubuntu.sources` to enable it.
+- Kconfig "choice" groups don't honor `.config` appends — use
+  `scripts/config --disable RANDSTRUCT_NONE` + `--enable RANDSTRUCT_FULL`
+  after `make olddefconfig`.
+- cc1 needs mpfr/mpc/gmp/isl/zlib transitively — bundle them.
+- as (binutils) needs libbfd + libopcodes — bundle them.
+- ld needs libjansson — bundle it.
+- ld looks for itself at `/usr/x86_64-alpine-linux-musl/bin/ld`
+  (target-prefixed subtree) — bundle that whole subtree.
+- gcc with `-fstack-protector-strong` (Alpine's default) needs
+  `libssp_nonshared.a` — bundle from `apk add ssp-nonshared`.
+- `CONFIG_BINFMT_SCRIPT=y` is required for `#!/bin/busybox sh` to
+  exec; tinyconfig disables it.
+
+### When would you still want the original "build static gcc against
+permuted musl" path?
+
+Only if you want the gcc binary itself to be 100% the same scrambling
+toolchain that built the rootfs — i.e., for the "every binary is
+unique to this system" property to extend to gcc itself. The current
+approach uses Alpine's binary toolchain (stock-built) but with our
+overkill dynamic loader; gcc itself isn't seed-scrambled, only the
+syscalls it issues are. For most threat models this is equivalent;
+for a strict "no foreign binaries" model, you'd revert to the
+musl-cross-make path.

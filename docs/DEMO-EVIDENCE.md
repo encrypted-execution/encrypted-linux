@@ -1,12 +1,32 @@
 # DEMO-EVIDENCE.md
 
-Captured terminal output proving the encrypted-linux Phase-2 PoC works
-end-to-end: a binary built inside the encrypted-linux QEMU image runs
-fine inside, but copying it to a stock Linux host fails because the
-syscall numbers don't match.
+Captured terminal output proving the full encrypted-linux stack works
+end-to-end: kernel + musl + scrambling-GCC + bundled in-VM toolchain
+all built from a single master seed; binaries from one seed don't run
+on stock hosts or different-seed hosts.
 
-Captured 2026-05-11. PoC seed:
+PoC seed (deterministic, public, in `./seed`):
 `7f3da98edf5ba694c25fd3405776c0414f3815d448cbca81cae75b9213006392`
+
+## What's in the stack (defenses, each seed-derived)
+
+1. **64-bit overkill syscall numbers** — HMAC-SHA256 derived, kernel
+   binary-searches a sorted dispatch table.
+2. **`CONFIG_RANDSTRUCT_FULL`** — Fisher-Yates struct-field
+   randomization via the upstream GCC plugin. Same master seed,
+   different HMAC label.
+3. **musl libc** — uses overkill syscalls in both C macros and
+   hand-patched x86_64 asm (movabsq for 64-bit immediates).
+4. **GCC arg-register permutation** (Phase 1) — patched
+   `gcc/config/i386/i386.cc` reads from a generated header.
+5. **Symbol mangling** — `printf` becomes `printf__abi_<8hex>`; bash
+   post-pass and GCC plugin both implemented, byte-identical output.
+6. **ELF entry bridge** — musl's `_start` patched to pass argc in the
+   permuted arg0 register (the kernel→userspace handoff that's
+   fixed by Linux ELF spec).
+7. **In-VM toolchain** — Alpine's gcc binary loaded via our overkill
+   musl as the system dynamic loader. Compiles new programs that also
+   use overkill syscalls.
 
 ## Reproduce
 
@@ -169,19 +189,73 @@ That demo lives in `scripts/scramble-mangle-test/test.sh` and
 Expected: 5 PASS for the post-pass mangling + 12 PASS for the GCC
 plugin. Both paths produce the same mangled output by design.
 
+## Step 6 — Randstruct (kernel struct-layout randomization)
+
+`CONFIG_RANDSTRUCT_FULL=y` is enabled in the overkill kernel using
+a seed derived from our master:
+
+```
+HMAC-SHA256(./seed, "kernel.randstruct") =
+  88109b515a893a785f6da7706dff2cdf...
+```
+
+This seed is installed at `scripts/gcc-plugins/randstruct.seed` in
+the kernel source tree before the build, so the GCC plugin produces a
+reproducible per-build struct layout permutation. Verified via:
+
+```
+$ bash scripts/verify-randstruct.sh
+=== Build log evidence ===
+  CONFIG_GCC_PLUGINS=y
+  CONFIG_RANDSTRUCT_FULL=y
+  CONFIG_RANDSTRUCT=y
+  CONFIG_GCC_PLUGIN_RANDSTRUCT=y
+=== Confirm both defenses still operate (boot test) ===
+  hello from encrypted-linux OVERKILL (64-bit syscalls)!
+    -> exit 0
+  compile OK
+  compiled INSIDE the encrypted-linux VM!
+    -> exit 0
+```
+
+## Step 7 — In-VM compile (NEW)
+
+The overkill rootfs (`build/overkill/rootfs-gcc.cpio.gz`, 70 MB)
+bundles Alpine's gcc + binutils + libgcc + libstdc++ + all transitive
+.so deps. Our overkill musl is installed as the system dynamic
+loader at `/lib/ld-musl-x86_64.so.1`. When gcc starts inside the VM,
+the kernel maps the ELF, the loader runs (our musl), it resolves
+gcc's libc symbols against our overkill libc.so, and every syscall
+from gcc/cc1/as/ld uses our scrambled numbers.
+
+```
+[step 2] compile /src/hello.c inside VM:
+  $ gcc /src/hello.c -o /tmp/myhello
+  compile OK
+
+[step 3] run the in-VM-compiled binary:
+compiled INSIDE the encrypted-linux VM!
+  -> exit 0
+```
+
+The resulting `/tmp/myhello` is statically linked against our overkill
+musl — same cross-host failure behavior as the pre-built `/bin/hello`.
+
 ## Summary
 
-| Test | On its native kernel | On stock Linux | On a different-seed kernel |
+| Test | Native overkill VM | Stock ubuntu:24.04 | Different-seed VM |
 |---|---|---|---|
-| `/bin/hello` (static, scrambled musl, permuted syscalls) | **prints message, exits 0** | **segfaults, exits 139** | **#GP fault, panics** |
+| `/bin/hello` (static, scrambled musl, overkill syscalls) | **works** | **segfault, exit 139** | **#GP fault** |
 | Dynamic binary referencing `printf__abi_<hex>` | resolves via scrambled libc | `undefined symbol: printf__abi_<hex>` | symbol mismatch |
-| Build new program inside VM with bundled `/usr/local-gcc/` | TODO: requires gcc statically linked to scrambled musl — see `docs/IN-VM-GCC-PATH.md` | n/a | n/a |
+| Compile new program inside VM with bundled gcc | **compiles + runs** | n/a | n/a |
+| Resulting in-VM-compiled binary | works | (same syscall failure path) | (same) |
+| Kernel struct layouts (randstruct full) | per-build randomized | (vmlinux info-leaks needed to reconstruct) | different |
 
-The first row is the Phase 2 value-prop: code that depends on a specific
-encrypted-linux seed cannot be moved to ANY other environment (stock or
-different-seeded). The second row is the Phase 1 value-prop: dynamic
-binding fails cleanly at load time. Phase 1 + Phase 2 of the design
-(plan/01, plan/02) — proven.
+All defenses together: scrambling at the kernel struct layer, at the
+kernel syscall layer, at the libc layer (syscalls + ABI), at the
+toolchain layer (symbol mangling + register permutation), and at the
+entry-bridge between kernel-ABI and userspace-ABI. Every layer is
+seed-derived from the same `./seed` file via distinct HMAC labels.
 
 ## Asciicast
 

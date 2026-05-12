@@ -1,0 +1,86 @@
+name: Overkill (full toolchain)
+
+# The heavy job: build the full image WITH bundled Alpine gcc + the
+# overkill musl as the dynamic loader, then boot and run an in-VM
+# compile via `el_demo=auto`. Wall time on GitHub-hosted ubuntu-latest:
+# ~30-50 minutes.
+#
+# Runs:
+#   - on manual trigger
+#   - weekly (Mondays at 04:00 UTC) to catch upstream-Alpine /
+#     upstream-Linux drift early
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  full-stack:
+    name: Full stack — overkill + randstruct + in-VM gcc
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y qemu-system-x86 coreutils
+
+      - name: Build image-build container
+        run: docker build -t encrypted-linux-image-build -f docker/Dockerfile.image-build .
+
+      - name: Generate overkill headers + randstruct seed
+        run: |
+          python3 scripts/gen-overkill-syscalls.py
+          python3 scripts/gen-randstruct-seed.py
+
+      - name: Build overkill kernel + musl + hello + busybox
+        run: bash scripts/build-overkill-image.sh
+
+      - name: Build overkill musl shared (for dynamic loader)
+        run: bash scripts/build-overkill-musl-shared.sh
+
+      - name: Extract Alpine toolchain (gcc, binutils, libgcc, libstdc++, deps)
+        run: bash scripts/extract-alpine-toolchain.sh
+
+      - name: Assemble initramfs with bundled gcc + overkill musl loader
+        run: bash scripts/assemble-overkill-gcc-initramfs.sh
+
+      - name: QEMU — boot, run hello, in-VM compile, run myhello
+        run: |
+          timeout 180 qemu-system-x86_64 -m 4G \
+              -kernel build/overkill/bzImage \
+              -initrd build/overkill/rootfs-gcc.cpio.gz \
+              -append "console=ttyS0 panic=5 loglevel=3 el_demo=auto" \
+              -nographic -no-reboot -accel tcg 2>&1 | tee qemu-full.log
+
+          set -e
+          grep -q "hello from encrypted-linux OVERKILL" qemu-full.log
+          grep -q "compile OK" qemu-full.log
+          grep -q "compiled INSIDE the encrypted-linux VM" qemu-full.log
+          echo "Full stack verified: boot + pre-built hello + in-VM compile + in-VM run."
+
+      - name: Verify randstruct artifacts
+        run: bash scripts/verify-randstruct.sh
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: overkill-full-stack
+          path: |
+            build/overkill/bzImage
+            build/overkill/hello
+            build/overkill/busybox
+            build/overkill/rootfs-gcc.cpio.gz
+            build/generated/asm/unistd_seeded.h
+            build/generated/asm/el_syscall_lookup.h
+            build/generated/randstruct.seed
+            build/overkill-*.log
+            qemu-full.log
+          retention-days: 14

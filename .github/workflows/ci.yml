@@ -1,0 +1,184 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # Fast lane — unit-level demos. Runs in ~5-10 minutes.
+  # ──────────────────────────────────────────────────────────────────
+  unit-tests:
+    name: Unit demos (Track A + Track B)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build encrypted-linux-test image
+        run: |
+          docker buildx build --load \
+              -t encrypted-linux-test \
+              -f docker/Dockerfile.test .
+
+      - name: Track A — post-compile symbol mangling (5 checks)
+        run: |
+          docker run --rm -v "$PWD":/work -w /work encrypted-linux-test \
+              bash scripts/scramble-mangle-test/test.sh
+
+      - name: Track A — GCC plugin compile-time mangling (12 checks)
+        run: |
+          docker run --rm -v "$PWD":/work -w /work encrypted-linux-test \
+              bash scripts/scramble-mangle-test/test-plugin.sh
+
+      - name: Track B — seed-lib + syscall renumbering (14 checks)
+        run: |
+          docker run --rm -v "$PWD":/work -w /work encrypted-linux-test \
+              bash scripts/test/test-seed-lib.sh
+
+      - name: 64-bit overkill generator (sanity)
+        run: |
+          python3 scripts/gen-overkill-syscalls.py
+          python3 scripts/gen-randstruct-seed.py
+          test -f build/generated/asm/unistd_seeded.h
+          test -f build/generated/asm/el_syscall_lookup.h
+          test -f build/generated/randstruct.seed
+          # Spot-check: syscall numbers must be 64-bit ULL constants.
+          grep -q "__NR_write 0x[0-9a-f]\{16\}ULL" build/generated/asm/unistd_seeded.h
+          # Lookup table must have EL_SYSCALL_COUNT defined.
+          grep -q "EL_SYSCALL_COUNT" build/generated/asm/el_syscall_lookup.h
+          echo "Overkill generators: PASS"
+
+  # ──────────────────────────────────────────────────────────────────
+  # Backend patch — verify the real GCC patch builds and produces a
+  # cross-compiler that emits permuted register code.
+  # ──────────────────────────────────────────────────────────────────
+  gcc-backend-patch:
+    name: GCC backend patch (Phase 1 M1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build gcc-build staging image
+        run: docker build -t encrypted-linux-gcc -f docker/Dockerfile.gcc-build .
+
+      - name: Build patched cross-compiler
+        run: bash scripts/build-scramble-gcc.sh
+
+      - name: Verify arg-register permutation (9 checks)
+        run: |
+          docker run --rm --user root \
+              -v "$PWD":/work -w /work \
+              encrypted-linux-gcc \
+              bash scripts/scramble-gcc-test/test.sh
+
+  # ──────────────────────────────────────────────────────────────────
+  # Overkill image — build the FULL kernel + musl + busybox + hello
+  # with overkill syscalls + randstruct, then boot in QEMU and assert
+  # that hello runs.
+  # ──────────────────────────────────────────────────────────────────
+  overkill-image:
+    name: Overkill image (kernel + musl + hello + QEMU smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU + coreutils (for gtimeout)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y qemu-system-x86 coreutils
+
+      - name: Build image-build staging container
+        run: docker build -t encrypted-linux-image-build -f docker/Dockerfile.image-build .
+
+      - name: Build overkill (kernel + musl + busybox + hello)
+        run: bash scripts/build-overkill-image.sh
+
+      - name: Verify randstruct in config
+        run: |
+          grep -q "^CONFIG_RANDSTRUCT_FULL=y" build/overkill-randstruct*.log \
+              || grep -q "^CONFIG_RANDSTRUCT_FULL=y" build/overkill-build.log \
+              || (echo "randstruct not enabled"; exit 1)
+          echo "CONFIG_RANDSTRUCT_FULL=y confirmed in build log"
+
+      - name: Assemble initramfs
+        run: |
+          # The basic initramfs uses busybox + pre-built hello.
+          docker run --rm --platform linux/amd64 --user root \
+              -v "$PWD":/work \
+              encrypted-linux-image-build \
+              bash -c "
+                  set -e
+                  ROOT=/tmp/rootfs
+                  rm -rf \$ROOT; mkdir -p \$ROOT/{bin,sbin,etc,proc,sys,dev,tmp,root,src}
+                  cp /work/build/overkill/busybox \$ROOT/bin/busybox
+                  for a in ash sh ls cat mount echo poweroff init; do
+                      ln -sf busybox \$ROOT/bin/\$a
+                  done
+                  cp /work/build/overkill/hello \$ROOT/bin/hello
+                  printf '#!/bin/busybox sh\n/bin/busybox mount -t proc none /proc\n/bin/hello; /bin/busybox poweroff -f\n' > \$ROOT/init
+                  chmod +x \$ROOT/init
+                  cd \$ROOT
+                  find . -print0 | cpio --null -ov --format=newc 2>/dev/null | gzip -9 > /work/build/overkill/rootfs.cpio.gz
+              "
+          ls -la build/overkill/rootfs.cpio.gz
+
+      - name: QEMU smoke-boot — verify hello prints
+        run: |
+          timeout 90 qemu-system-x86_64 -m 4G \
+              -kernel build/overkill/bzImage \
+              -initrd build/overkill/rootfs.cpio.gz \
+              -append "console=ttyS0 panic=2 loglevel=3" \
+              -nographic -no-reboot -accel tcg 2>&1 | tee qemu.log
+          grep -q "hello from encrypted-linux OVERKILL" qemu.log \
+              || (echo "Expected 'hello from encrypted-linux OVERKILL' in boot output"; tail -50 qemu.log; exit 1)
+          echo "Overkill VM boots and runs hello with 64-bit syscalls."
+
+      - name: Verify cross-host failure on stock ubuntu
+        run: |
+          # Same hello binary on stock ubuntu:24.04 should NOT print
+          # the expected message. It should segfault or error out.
+          set +e
+          docker run --rm --platform linux/amd64 \
+              -v "$PWD/build/overkill":/w:ro \
+              ubuntu:24.04 \
+              sh -c '/w/hello' > stock.log 2>&1
+          rc=$?
+          echo "Stock ubuntu exit code: $rc"
+          cat stock.log
+          # If stock exited 0 AND printed the success message, FAIL.
+          if [ $rc -eq 0 ] && grep -q "hello from encrypted-linux OVERKILL" stock.log; then
+              echo "SECURITY REGRESSION: overkill binary ran on stock ubuntu"
+              exit 1
+          fi
+          echo "Cross-host failure confirmed (stock ubuntu rejected the binary)."
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: overkill-image
+          path: |
+            build/overkill/bzImage
+            build/overkill/hello
+            build/overkill/busybox
+            build/overkill/rootfs.cpio.gz
+            build/overkill-*.log
+            build/generated/asm/unistd_seeded.h
+            build/generated/asm/el_syscall_lookup.h
+            qemu.log
+          retention-days: 7
