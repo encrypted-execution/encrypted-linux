@@ -54,6 +54,10 @@ jobs:
 
       - name: 64-bit overkill generator (sanity)
         run: |
+          # The prior Track A/B steps ran docker containers as --user root
+          # which left files in build/generated/ owned by root. Reclaim
+          # ownership so the host-side python regenerator can overwrite.
+          sudo chown -R "$(id -u):$(id -g)" build || true
           python3 scripts/gen-overkill-syscalls.py
           python3 scripts/gen-randstruct-seed.py
           test -f build/generated/asm/unistd_seeded.h
@@ -110,13 +114,18 @@ jobs:
         run: docker build -t encrypted-linux-image-build -f docker/Dockerfile.image-build .
 
       - name: Build overkill (kernel + musl + busybox + hello)
-        run: bash scripts/build-overkill-image.sh
+        run: |
+          mkdir -p build
+          # Tee to a log file so the next step can grep for evidence of
+          # CONFIG_RANDSTRUCT_FULL=y. The script itself prints the
+          # "Effective randstruct config:" block to stdout.
+          set -o pipefail
+          bash scripts/build-overkill-image.sh 2>&1 | tee build/overkill-build.log
 
       - name: Verify randstruct in config
         run: |
-          grep -q "^CONFIG_RANDSTRUCT_FULL=y" build/overkill-randstruct*.log \
-              || grep -q "^CONFIG_RANDSTRUCT_FULL=y" build/overkill-build.log \
-              || (echo "randstruct not enabled"; exit 1)
+          grep -q "^CONFIG_RANDSTRUCT_FULL=y" build/overkill-build.log \
+              || (echo "randstruct not enabled"; tail -50 build/overkill-build.log; exit 1)
           echo "CONFIG_RANDSTRUCT_FULL=y confirmed in build log"
 
       - name: Assemble initramfs
