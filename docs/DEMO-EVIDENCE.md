@@ -190,3 +190,62 @@ A complete asciinema recording of the end-to-end demo is at
 ```
 asciinema play docs/demo.cast
 ```
+
+## Overkill: 64-bit syscall cardinality
+
+The default 10-bit slot scheme (1024 slots, 365 valid) has been
+extended with a 64-bit overkill mode. Each syscall number is now
+`HMAC-SHA256(seed, name)[:8 little-endian]` — a random-looking
+64-bit value. 365 valid out of 2⁶⁴ possible. Brute force per
+attempt: ~2 × 10⁻¹⁷, cryptographically infeasible.
+
+### Mechanism
+
+Kernel side: a patched `arch/x86/entry/common.c` does
+
+```c
+u64 abi_nr = regs->orig_ax;        // full 64-bit
+int idx = el_syscall_lookup(nr);   // binary search O(log N)
+if (idx >= 0) sys_call_table[idx](regs);
+```
+
+`el_syscall_lookup_table` is a sorted-by-abi_nr table of `(u64,
+u16)` pairs generated per-build. Forging a valid number requires
+finding an HMAC-SHA256 preimage — Knob 3 (cryptographic auth) is
+implicit.
+
+### Userspace evidence
+
+```
+$ objdump -d build/overkill/hello | grep -B1 syscall | head
+  4017bf: movabsq $0x60eba2b82b18a275, %rax   # write
+  4018a8: movabsq $0x19a2218628084941, %rax   # arch_prctl
+  ...
+```
+
+Compare to the 10-bit slot version (`movl $0x3d7, %eax` for
+exit_group=983).
+
+### Cross-host / cross-scheme failure matrix
+
+| Binary                       | Native overkill VM | Stock ubuntu | 10-bit-slot VM |
+|------------------------------|--------------------|--------------|----------------|
+| Overkill hello (64-bit)      | works              | segfault     | #GP fault      |
+| 10-bit slot hello            | #GP fault          | segfault     | works          |
+
+Two encrypted-linux schemes built from the same source code, same
+build seed, just different syscall-number widths — and they're
+mutually incompatible by design.
+
+### Run the demo
+
+```
+bash scripts/run-overkill-demo.sh
+```
+
+### Build it
+
+```
+bash scripts/build-overkill-image.sh             # ~10 min
+bash scripts/assemble-overkill-initramfs.sh
+```

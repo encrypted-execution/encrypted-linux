@@ -1,7 +1,12 @@
 # encrypted-linux — Current State
 
-**Last updated:** 2026-05-11 (night)
-**Phase:** **Phase 1 + Phase 2 BOTH INTEGRATED end-to-end.**
+**Last updated:** 2026-05-12 (early morning)
+**Phase:** **64-bit OVERKILL syscall scrambling works end-to-end.**
+Brute-force search space went from 2¹⁰ to 2⁶⁴ per syscall.
+
+Image at `build/overkill/`. `bash scripts/run-overkill-demo.sh`.
+
+Earlier achievement: Phase 1 + Phase 2 integrated end-to-end.
 
 Hello binary `build/image/hello-phase1plus2` carries:
 - Phase 1: argument-register permutation in calls to libc (verified
