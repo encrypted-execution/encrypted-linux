@@ -83,14 +83,23 @@ def pick_unique_names(canonical: list[str], seed: bytes) -> dict[str, str]:
 
 def emit_sed(rename: dict[str, str]) -> str:
     """Emit a sed program that rewrites canonical field names to the
-    new ones in C string literals. The kernel's fs/proc/task_mmu.c
-    contains lines like `seq_put_decimal_ull_width(m, "VmPeak:\t", ...)`.
+    new ones in C string literals.
+
+    The kernel's fs/proc/task_mmu.c emits the field names like
+      SEQ_PUT_DEC("VmPeak:\\t", ...)      # first entry
+      SEQ_PUT_DEC(" kB\\nVmSize:\\t", ...) # subsequent entries
+
+    So `Vm<Name>:` does NOT always have a `"` immediately before it
+    (it's mid-literal after `\\n`). The trailing-`:\\t` anchor was
+    tried earlier — GNU sed interprets `\\t` in the search pattern
+    as a tab character, but the C source contains the *two* chars
+    `\\` and `t`, so it never matches. We anchor on the colon only;
+    the Vm* names are specific enough that accidental matches in
+    comments or unrelated code are not a real concern.
     """
     lines = []
     for old, new in rename.items():
-        # Match the C string-literal form `"VmPeak:"` keeping the colon
-        # so we don't accidentally hit a variable named `VmPeak`.
-        lines.append(f's|"{old}:|"{new}:|g')
+        lines.append(f's|{old}:|{new}:|g')
     return "\n".join(lines) + "\n"
 
 

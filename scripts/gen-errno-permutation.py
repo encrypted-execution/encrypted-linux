@@ -162,6 +162,7 @@ def emit_kernel_full_header(perm: dict[str, int]) -> str:
     lines.append("")
     lines.append("#define EWOULDBLOCK\tEAGAIN")
     lines.append("#define EDEADLOCK\tEDEADLK")
+    lines.append("#define ENOTSUP\t\tEOPNOTSUPP")
     lines.append("")
     lines.append("#endif")
     lines.append("")
@@ -186,6 +187,10 @@ def emit_musl_header(perm: dict[str, int]) -> str:
     lines.append("")
     lines.append("#define EWOULDBLOCK\tEAGAIN")
     lines.append("#define EDEADLOCK\tEDEADLK")
+    # musl source references ENOTSUP (e.g., src/network/setsockopt.c); on
+    # most arches this is an alias of EOPNOTSUPP. Preserve that alias so
+    # the replacement header is a true drop-in.
+    lines.append("#define ENOTSUP\t\tEOPNOTSUPP")
     lines.append("")
     return "\n".join(lines)
 
