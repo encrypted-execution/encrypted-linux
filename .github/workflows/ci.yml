@@ -35,17 +35,21 @@ jobs:
 
       - name: Track A — post-compile symbol mangling (5 checks)
         run: |
-          docker run --rm -v "$PWD":/work -w /work encrypted-linux-test \
+          docker run --rm --user root -v "$PWD":/work -w /work encrypted-linux-test \
               bash scripts/scramble-mangle-test/test.sh
 
       - name: Track A — GCC plugin compile-time mangling (12 checks)
         run: |
-          docker run --rm -v "$PWD":/work -w /work encrypted-linux-test \
+          # --user root: the plugin Makefile writes scramble-mangle.so into the
+          # bind-mounted source dir, which is owned by the runner user (UID
+          # differs from the in-image `builder` user). Running as root inside
+          # the container sidesteps the permission mismatch on the bind mount.
+          docker run --rm --user root -v "$PWD":/work -w /work encrypted-linux-test \
               bash scripts/scramble-mangle-test/test-plugin.sh
 
       - name: Track B — seed-lib + syscall renumbering (14 checks)
         run: |
-          docker run --rm -v "$PWD":/work -w /work encrypted-linux-test \
+          docker run --rm --user root -v "$PWD":/work -w /work encrypted-linux-test \
               bash scripts/test/test-seed-lib.sh
 
       - name: 64-bit overkill generator (sanity)

@@ -139,7 +139,14 @@ HC
 file /work/build/overkill/hello
 
 echo "=== Inspect baked-in syscall numbers (should be 64-bit hex) ==="
-objdump -d /work/build/overkill/hello | grep -B1 syscall | grep -E "movabs|movq.*%rax" | head -10
+# Diagnostic only. Use a subshell with pipefail off so SIGPIPE from `head`
+# closing the pipe early doesn't fail the build, and so an empty match
+# (older binutils, different mnemonic) doesn't either.
+( set +o pipefail
+  objdump -d /work/build/overkill/hello \
+      | grep -B1 syscall \
+      | grep -E "movabs|movq.*%rax" \
+      | head -10 ) || true
 
 echo "================================================="
 echo "=== Build busybox (same musl) ==="
